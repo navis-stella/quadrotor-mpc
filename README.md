@@ -4,7 +4,7 @@ Nonlinear model predictive control for a 3D quadrotor in Python, using the
 [acados](https://docs.acados.org/) solver and the [CasADi](https://web.casadi.org/) symbolic
 framework. The project works through MPC theory stage by stage, from terminal ingredients and
 stability to offset-free control, state estimation, tracking of piece-wise constant
-references and of time-varying trajectories, and obstacle avoidance. Every stage runs on the same quadrotor
+references and of time-varying trajectories, obstacle avoidance and robust tube MPC. Every stage runs on the same quadrotor
 model and changes one ingredient at a time, so the effect of each method can be compared
 directly.
 
@@ -40,7 +40,7 @@ Equations of motion, disturbance model and quaternion conventions →
 | `stage6` | 6 | **Trajectory-tracking NMPC** — helix reference, flatness feedforward $(x_r, u_r)$, time-indexed reference over the horizon, quaternion-error cost; noisy $`y = [p;\, q;\, \omega]`$ with the Stage 4b MHE | [stage6_trajectory.md](docs/stage6_trajectory.md) |
 | `stage7` | 7a | **Obstacle avoidance with state constraints** — vertical pillars on the Stage 6 helix as soft squared-distance constraints $h_j(p) \ge 0$ (exact penalty), warm start projected onto the free space (nominal plant, full state feedback) | [stage7a_obst_dist.md](docs/stage7a_obst_dist.md) |
 | `stage7` | 7b | **Discrete-time control barrier function** — same scene, constraint $`h_j(x_{i+1}) \ge (1-\gamma)\, h_j(x_i)`$ with the next state as an RK4 step inside the constraint; $\gamma$ sweep | [stage7b_obst_dcbf.md](docs/stage7b_obst_dcbf.md) |
-| *upcoming* | 8 | Robust MPC | |
+| `stage8` | 8 | **Tube-based robust MPC** — nominal MPC on the hover linearization + ancillary LQR feedback; the disturbance set $\mathbb W$ bounds $d$ *and* the linearization error of the nonlinear plant (sampled), constraints tightened by the support function of the mRPI set (nonlinear plant, full state feedback) | [stage8_tube.md](docs/stage8_tube.md) |
 | *upcoming* | 9 | Stochastic MPC | |
 
 ## Key results
@@ -57,6 +57,8 @@ Equations of motion, disturbance model and quaternion conventions →
 | 6 | A 22.9 s climbing helix (2 m/s, tilt up to 17.5°) is flown with only noisy $`[p;\, q;\, \omega]`$ measured and the certified MHE in the loop: 10 mm RMS position error and 0.65° attitude error, 0 failed solves, MPC ≈ 3 ms per call. With full state feedback the same controller tracks to below 0.2 mm. |
 | 7a | Three pillars stand on the helix, crossed 9 times in 3 turns. The quadrotor leaves the reference about one horizon (1 s) before each pillar, passes it on the near side 0.35 m off the reference and keeps exactly the 5 cm margin (47.6 mm between samples); 0 failed solves, slack at solver tolerance, MPC ≈ 5 ms per call. |
 | 7b | The DCBF with $\gamma = 0.2$ starts the avoidance 0.25 s earlier and keeps 85–111 mm instead of 50 mm from the pillars, with smaller step changes of the body rates. The $\gamma$ sweep shows the trade-off: a smaller $\gamma$ avoids earlier and farther, but below $\gamma \approx 0.2$ it binds for all pillars at once, the rate bound is hit in up to 36 % of the samples and the tilt reaches 40°. |
+
+| 8 | Regulation to a hover point 1.4 m away under a time-varying disturbance at the vertices of $\mathbb D$, on the nonlinear plant. Every guaranteed inequality holds at all 300 samples: error inside the tube (at most 23 % of its cross-section), state and wrench inside $\mathbb X$, $\mathbb U$, realized model error inside $\mathbb W$; 0 failed solves, MPC ≈ 2 ms per call. The linearization error is 3.5–100× larger than the effect of $d$ and sets the tube width (±0.20 m horizontally), which limits the method to a small envelope (tilt ≤ 5.7°). |
 
 ## File structure
 
@@ -111,6 +113,12 @@ quadrotor_3d_nmpc/
 ├── simulate_obst_dist.py       # Stage 7a  — entry point: distance constraint
 ├── simulate_obst_dcbf.py       # Stage 7b  — entry point: DCBF (--sweep over γ)
 │
+├── compute_tube_params.py      # Stage 8   — offline: linear model, sampled W, ancillary K,
+│                               #             mRPI support function, tightening, terminal set
+├── ocp_config_tube.py          # Stage 8   — nominal MPC (linear, tightened sets, terminal ellipsoid)
+├── simulate_tube.py            # Stage 8   — entry point: tube MPC on the nonlinear plant
+├── data/tube_params.npz        # Stage 8   — offline tube parameters
+│
 ├── run.sh                      # WSL bridge launcher (Windows Git Bash → WSL2)
 ├── docs/
 │   ├── quadrotor_model.md
@@ -122,7 +130,8 @@ quadrotor_3d_nmpc/
 │   ├── stage5_tracking.md
 │   ├── stage6_trajectory.md
 │   ├── stage7a_obst_dist.md
-│   └── stage7b_obst_dcbf.md
+│   ├── stage7b_obst_dcbf.md
+│   └── stage8_tube.md
 ├── results/                    # Figures per stage (tracked)
 │   ├── stage1_basic/
 │   ├── stage2a_qih/
@@ -134,7 +143,8 @@ quadrotor_3d_nmpc/
 │   ├── stage5_tracking/
 │   ├── stage6_trajectory/       # MHE run; nominal/ = verification run
 │   ├── stage7a_obst_dist/
-│   └── stage7b_obst_dcbf/
+│   ├── stage7b_obst_dcbf/
+│   └── stage8_tube/
 └── c_generated_code/           # acados generated code (gitignored)
 ```
 
@@ -172,6 +182,8 @@ The project files live on the Windows drive; acados runs in WSL2. `run.sh` handl
 ./run.sh simulate_trajectory.py --nominal   # Stage 6 check   → results/stage6_trajectory/nominal/
 ./run.sh simulate_obst_dist.py        # Stage 7a              → results/stage7a_obst_dist/
 ./run.sh simulate_obst_dcbf.py [--sweep]    # Stage 7b        → results/stage7b_obst_dcbf/
+./run.sh compute_tube_params.py       # Stage 8 offline       → data/tube_params.npz
+./run.sh simulate_tube.py             # Stage 8               → results/stage8_tube/
 
 ./run.sh observability_check.py       # observability at hover
 ./run.sh detectability_check.py       # re-derive the MHE certificate (needs cvxpy + MOSEK)
