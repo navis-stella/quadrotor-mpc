@@ -219,7 +219,7 @@ Or directly inside WSL:
 
 ```bash
 source ~/acados_env/bin/activate
-cd /mnt/e/WorkSpace/GitHub/quadrotor_3d_nmpc
+cd /path/to/quadrotor_3d_nmpc        # the repo root (on a Windows drive: /mnt/<drive>/...)
 python -m stage4_estimation.simulate_ekf
 ```
 
