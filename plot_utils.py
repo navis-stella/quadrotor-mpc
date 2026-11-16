@@ -14,6 +14,8 @@ titles and paths.
     plot_tracking_error                              ‖p − p_r‖, ∠(q, q_r)  (Stage 6)
     plot_obstacle_topview, plot_obstacle_clearance   pillars, gap   (Stage 7a)
     plot_dcbf_sweep                                  DCBF γ sweep   (Stage 7b)
+    plot_tube_states, plot_tube_inputs,              x in z ⊕ S, ν in Mv ⊕ MKS,
+    plot_tube_certificate                            e/h_S, w/w̄   (Stage 8)
 
 All functions require explicit title and save_path — no stage-specific
 defaults here, so each simulation script controls its own labeling.
@@ -838,6 +840,159 @@ def plot_dcbf_sweep(curves:    list,
         ax.set_xlabel('t [s]')
         ax.grid(True, alpha=0.3)
     axes[0].legend(fontsize=8, loc='upper right')
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+# ─────────────────────────────────────────────────────────────────
+# Tube MPC  (Stage 8 — robust tube around the nominal trajectory)
+# ─────────────────────────────────────────────────────────────────
+_TUBE_NAMES = ['px − p_ref [m]', 'py − p_ref [m]', 'pz − p_ref [m]',
+               'vx [m/s]', 'vy [m/s]', 'vz [m/s]',
+               'qx [-]', 'qy [-]', 'qz [-]',
+               'p [rad/s]', 'q [rad/s]', 'r [rad/s]']
+
+
+def plot_tube_states(X_e:       np.ndarray,
+                     Z:         np.ndarray,
+                     h_x:       np.ndarray,
+                     Ts:        float,
+                     idx_x:     np.ndarray,
+                     x_bound:   np.ndarray,
+                     x_bar:     np.ndarray,
+                     title:     str,
+                     save_path: str):
+    """
+    Stage 8: true state x against the nominal z with the tube z ± h_S (4 × 3).
+
+    X_e     (n+1, 12)  plant state in deviation coordinates [p − p_ref, v, qv, ω]
+    Z       (n+1, 12)  nominal state
+    h_x     (12,)      support of the tube S along each axis (cross-section)
+    idx_x, x_bound, x_bar   constrained coordinates, X and X̄ = X ⊖ S
+
+    The tube guarantee is that the blue curve never leaves the green band;
+    the nominal (green) stays inside X̄ (orange), so x stays inside X (red).
+    """
+    t = np.arange(X_e.shape[0]) * Ts
+    fig, axes = plt.subplots(4, 3, figsize=(14, 12))
+    fig.suptitle(title, fontsize=14)
+    for j, ax in enumerate(axes.flat):
+        ax.fill_between(t, Z[:, j] - h_x[j], Z[:, j] + h_x[j], color='green', alpha=0.15,
+                        lw=0, label='tube z ± h_S')
+        ax.plot(t, Z[:, j],   'g--', lw=1.0, label='nominal z')
+        ax.plot(t, X_e[:, j], 'b',   lw=1.2, label='state x')
+        k = np.where(np.asarray(idx_x) == j)[0]
+        if len(k):
+            for sgn in (-1, 1):
+                ax.axhline(sgn * x_bound[k[0]], color='r', lw=1,
+                           label='X' if sgn > 0 else None)
+                ax.axhline(sgn * x_bar[k[0]], color='darkorange', ls='--', lw=1,
+                           label='X̄ = X ⊖ S' if sgn > 0 else None)
+        else:
+            ax.axhline(0.0, color='r', ls='--', lw=1, label='target')
+        ax.set_ylabel(_TUBE_NAMES[j])
+        ax.set_xlabel('t [s]')
+        ax.grid(True, alpha=0.3)
+        if j % 3 == 0:
+            ax.legend(fontsize=7, loc='upper right')
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+def plot_tube_inputs(Nu:        np.ndarray,
+                     Nu_nom:    np.ndarray,
+                     h_nu:      np.ndarray,
+                     Ts:        float,
+                     nu_bound:  np.ndarray,
+                     nu_bar:    np.ndarray,
+                     title:     str,
+                     save_path: str):
+    """
+    Stage 8: applied wrench deviation ν = MIXER (u − f_hover) against the
+    nominal MIXER v with the band ± h_KS (1 × 4: δT, τx, τy, τz).
+    """
+    t = np.arange(Nu.shape[0]) * Ts
+    labels = ['δT [N]', 'τx [N·m]', 'τy [N·m]', 'τz [N·m]']
+    fig, axes = plt.subplots(1, 4, figsize=(18, 4))
+    fig.suptitle(title, fontsize=14)
+    for i, ax in enumerate(axes):
+        ax.fill_between(t, Nu_nom[:, i] - h_nu[i], Nu_nom[:, i] + h_nu[i], step='post',
+                        color='green', alpha=0.15, lw=0, label='M v ± h_KS')
+        ax.step(t, Nu_nom[:, i], 'g--', where='post', lw=1.0, label='nominal M v')
+        ax.step(t, Nu[:, i],     'b',   where='post', lw=1.1, label='applied ν')
+        for sgn in (-1, 1):
+            ax.axhline(sgn * nu_bound[i], color='r', lw=1, label='U' if sgn > 0 else None)
+            ax.axhline(sgn * nu_bar[i], color='darkorange', ls='--', lw=1,
+                       label='Ū = U ⊖ KS' if sgn > 0 else None)
+        ax.set_ylabel(labels[i])
+        ax.set_xlabel('t [s]')
+        ax.grid(True, alpha=0.3)
+    axes[0].legend(fontsize=7, loc='upper right')
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+def plot_tube_certificate(E_share:   np.ndarray,
+                          W_share:   np.ndarray,
+                          D_share:   np.ndarray,
+                          Ts:        float,
+                          title:     str,
+                          save_path: str,
+                          gauge:     tuple = None):
+    """
+    Stage 8: the three inequalities the guarantee rests on, per sample.
+
+    E_share (n+1, 12)  |e_j| / h_S(e_j)   — error against the tube along the axes
+    W_share (n, 12)    |w_j| / w̄_j        — realized w inside the sampled box W
+    D_share (n, 6)     d_j / d̄_j          — the disturbance the plant received
+    gauge              optional (t (m,), γ (m,)) — exact membership e ∈ S ⇔ γ ≤ 1
+                       (black dots, left panel)
+
+    Every curve of the left two panels must stay ≤ 1 (red line).
+    """
+    t_x = np.arange(E_share.shape[0]) * Ts
+    t_u = np.arange(W_share.shape[0]) * Ts
+    groups = [('p', slice(0, 3)), ('v', slice(3, 6)), ('q_v', slice(6, 9)), ('ω', slice(9, 12))]
+    fig, axes = plt.subplots(1, 3, figsize=(17, 4.5))
+    fig.suptitle(title, fontsize=14)
+
+    colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple']   # red = the bound
+    for (name, sl), col in zip(groups, colors):
+        axes[0].plot(t_x, E_share[:, sl].max(axis=1), color=col, lw=1.2, label=name)
+        axes[1].plot(t_u, W_share[:, sl].max(axis=1), color=col, lw=1.0, label=name)
+    if gauge is not None:
+        axes[0].plot(gauge[0], gauge[1], 'k.', ms=4, label='gauge γ(e)')
+    for ax, lab in ((axes[0], 'max |e_j| / h_S(e_j),  γ(e)'), (axes[1], 'max |w_j| / w̄_j')):
+        ax.axhline(1.0, color='r', lw=1, label='bound')
+        ax.set_ylim(0, 1.15)
+        ax.set_ylabel(lab)
+        ax.set_xlabel('t [s]')
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc='upper right', ncol=6)
+    axes[0].set_title('error e = x − z inside the tube S', fontsize=9)
+    axes[1].set_title('one-step model error w inside W', fontsize=9)
+
+    # d is (nearly) always at a vertex of D → a sign map reads better than 6 steps
+    d_names = ['d_fx', 'd_fy', 'd_fz', 'd_τx', 'd_τy', 'd_τz']
+    im = axes[2].imshow(D_share.T, aspect='auto', cmap='coolwarm', vmin=-1, vmax=1,
+                        interpolation='nearest',
+                        extent=(0, D_share.shape[0] * Ts, D_share.shape[1] - 0.5, -0.5))
+    axes[2].set_yticks(range(len(d_names)), d_names)
+    axes[2].set_xlabel('t [s]')
+    axes[2].set_title('disturbance d_j / d̄_j (inside D)', fontsize=9)
+    fig.colorbar(im, ax=axes[2], fraction=0.05, pad=0.02)
 
     plt.tight_layout()
     _ensure_dir(save_path)
