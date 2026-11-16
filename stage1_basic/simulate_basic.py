@@ -28,11 +28,20 @@ import numpy as np
 from core.quadrotor_model          import (create_rotor_plant, rotor_plant_hover_state,
                                            rotor_to_thrust_state, thrust_from_rotor,
                                            quat_normalize, F_MIN, F_MAX, NX, NXM, NU)
-from stage1_basic.ocp_config_basic import create_solver
+from stage1_basic.ocp_config_basic import create_solver as create_basic_solver
 from core.plot_utils               import plot_states, plot_inputs, plot_3d_trajectory
 
 RESULTS_DIR = os.path.join('results', 'stage1_basic')
 N_SUB       = 5      # plant substeps per control sample — logs the rotor thrust every 10 ms
+
+# Scenario (shared with Stage 2): hover at the origin → hover at (1.0, 0.5, 1.5),
+# level attitude, zero velocity
+X_REF = np.array([
+    1.0, 0.5, 1.5,        # px, py, pz
+    0.0, 0.0, 0.0,        # vx, vy, vz
+    1.0, 0.0, 0.0, 0.0,   # qw, qx, qy, qz   (identity = level)
+    0.0, 0.0, 0.0         # p, q, r
+])
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -42,7 +51,8 @@ def simulate(x0:        np.ndarray,
              x_ref:     np.ndarray,
              N:         int   = 20,
              T_horizon: float = 1.0,
-             T_sim:     float = 5.0):
+             T_sim:     float = 5.0,
+             create_solver = create_basic_solver):
     """
     Closed-loop NMPC simulation with AcadosSimSolver as plant.
 
@@ -59,11 +69,15 @@ def simulate(x0:        np.ndarray,
         N:          prediction horizon steps
         T_horizon:  prediction horizon duration [s]
         T_sim:      total simulation time [s]
+        create_solver: solver factory (x_ref, N, T_horizon) → AcadosOcpSolver;
+                    default the Stage 1 solver, Stage 2 passes its own — the
+                    closed loop is the same for all three terminal treatments
 
     Returns:
         X:      MPC-state trajectory [x; f]   (n_sim+1, 17)
         U:      thrust commands f_cmd          (n_sim,   4)
         F_act:  rotor thrust k_f Ω² every Ts/N_SUB  (n_sim·N_SUB+1, 4)
+        X_N:    predicted terminal state x_N of every solve  (n_sim, 17)
         Ts:     sample time [s]
     """
     Ts    = T_horizon / N
@@ -79,6 +93,7 @@ def simulate(x0:        np.ndarray,
 
     X     = np.zeros((n_sim + 1, NXM))
     U     = np.zeros((n_sim,     NU))
+    X_N   = np.zeros((n_sim,     NXM))
     F_act = np.zeros((n_sim * N_SUB + 1, NU))
     x_plant  = x0.copy()
     X[0]     = rotor_to_thrust_state(x_plant)
@@ -93,11 +108,12 @@ def simulate(x0:        np.ndarray,
         status = solver.solve()
         if status not in [0, 2]:
             print(f'  [step {k:3d}] solver status {status} — stopping.')
-            X, U, F_act = X[:k+1], U[:k], F_act[:k * N_SUB + 1]
+            X, U, X_N, F_act = X[:k+1], U[:k], X_N[:k], F_act[:k * N_SUB + 1]
             break
 
-        # extract first optimal command
-        U[k] = solver.get(0, 'u')
+        # extract first optimal command and the predicted terminal state
+        U[k]   = solver.get(0, 'u')
+        X_N[k] = solver.get(N, 'x')
 
         # simulate plant one sample (N_SUB substeps, command held)
         for j in range(N_SUB):
@@ -114,7 +130,7 @@ def simulate(x0:        np.ndarray,
                   f'qw={X[k,6]:+.4f}  qx={X[k,7]:+.4f}  qy={X[k,8]:+.4f}  qz={X[k,9]:+.4f}')
 
     print('\nSimulation complete.')
-    return X, U, F_act, Ts
+    return X, U, F_act, X_N, Ts
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -122,18 +138,11 @@ def simulate(x0:        np.ndarray,
 # ─────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
 
-    # reference: hover at (1.0, 0.5, 1.5), level attitude, zero velocity
-    x_ref = np.array([
-        1.0, 0.5, 1.5,        # px, py, pz
-        0.0, 0.0, 0.0,        # vx, vy, vz
-        1.0, 0.0, 0.0, 0.0,   # qw, qx, qy, qz   (identity = level)
-        0.0, 0.0, 0.0         # p, q, r
-    ])
-
+    x_ref = X_REF
     # initial state: hovering at the origin — level, stationary, rotors at hover speed
     x0 = rotor_plant_hover_state()
 
-    X, U, F_act, Ts = simulate(x0, x_ref, N=20, T_horizon=1.0, T_sim=5.0)
+    X, U, F_act, _, Ts = simulate(x0, x_ref, N=20, T_horizon=1.0, T_sim=5.0)
 
     plot_states(X, Ts, x_ref,
                 title='Stage 1 — State Trajectory (Simple Terminal Cost)',
