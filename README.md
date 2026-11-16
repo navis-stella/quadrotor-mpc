@@ -41,7 +41,7 @@ Equations of motion, disturbance model and quaternion conventions →
 | `stage7` | 7a | **Obstacle avoidance with state constraints** — vertical pillars on the Stage 6 helix as soft squared-distance constraints $h_j(p) \ge 0$ (exact penalty), warm start projected onto the free space (nominal plant, full state feedback) | [stage7a_obst_dist.md](docs/stage7a_obst_dist.md) |
 | `stage7` | 7b | **Discrete-time control barrier function** — same scene, constraint $`h_j(x_{i+1}) \ge (1-\gamma)\, h_j(x_i)`$ with the next state as an RK4 step inside the constraint; $\gamma$ sweep | [stage7b_obst_dcbf.md](docs/stage7b_obst_dcbf.md) |
 | `stage8` | 8 | **Tube-based robust MPC** — nominal MPC on the hover linearization + ancillary LQR feedback; the disturbance set $\mathbb W$ bounds $d$ *and* the linearization error of the nonlinear plant (sampled), constraints tightened by the support function of the mRPI set (nonlinear plant, full state feedback) | [stage8_tube.md](docs/stage8_tube.md) |
-| *upcoming* | 9 | Stochastic MPC | |
+| `stage9` | 9 | **Stochastic MPC with chance constraints** — Gaussian disturbance, deterministic equivalent on the hover linearization: error covariance propagated offline, state and input constraints tightened by $\Phi^{-1}(1-eta)\,\sigma_k$ per prediction step (Cantelli factor as distribution-free option), $z_0 = x(t)$, soft state rows; Monte Carlo check on the nonlinear plant | [stage9_smpc.md](docs/stage9_smpc.md) |
 
 ## Key results
 
@@ -59,6 +59,7 @@ Equations of motion, disturbance model and quaternion conventions →
 | 7b | The DCBF with $\gamma = 0.2$ starts the avoidance 0.25 s earlier and keeps 85–111 mm instead of 50 mm from the pillars, with smaller step changes of the body rates. The $\gamma$ sweep shows the trade-off: a smaller $\gamma$ avoids earlier and farther, but below $\gamma \approx 0.2$ it binds for all pillars at once, the rate bound is hit in up to 36 % of the samples and the tilt reaches 40°. |
 
 | 8 | Regulation to a hover point 1.4 m away under a time-varying disturbance at the vertices of $\mathbb D$, on the nonlinear plant. Every guaranteed inequality holds at all 300 samples: error inside the tube (at most 23 % of its cross-section), state and wrench inside $\mathbb X$, $\mathbb U$, realized model error inside $\mathbb W$; 0 failed solves, MPC ≈ 2 ms per call. The linearization error is 3.5–100× larger than the effect of $d$ and sets the tube width (±0.20 m horizontally), which limits the method to a small envelope (tilt ≤ 5.7°). |
+| 9 | Regulation towards a hover point 0.1 m behind a wall under Gaussian gusts ($\sigma_f = 0.5$ N), 300 closed-loop runs on the nonlinear plant. Open-loop prediction verified on the nonlinear plant (coverage 0.946–0.954 for the target 0.95). Closed loop: wall violated in at most 0.33 % of the runs at any sample ($eta = 5$ %), tilt never, motor limits hard; 0 failed solves in 60 000, the soft state rows were needed in 20. The drone hovers 50 mm from the wall; re-planning from the measured state makes the closed loop far more cautious than $eta$ allows. |
 
 ## File structure
 
@@ -119,6 +120,12 @@ quadrotor_3d_nmpc/
 ├── simulate_tube.py            # Stage 8   — entry point: tube MPC on the nonlinear plant
 ├── data/tube_params.npz        # Stage 8   — offline tube parameters
 │
+├── compute_smpc_params.py      # Stage 9   — offline: Σ_w, feedback K, error covariance Σ_e(k),
+│                               #             tightened bounds θ_k, η_k (Gaussian / Cantelli)
+├── ocp_config_smpc.py          # Stage 9   — deterministic-equivalent QP (per-node bounds, soft state rows)
+├── simulate_smpc.py            # Stage 9   — entry point: 300 closed loops on the nonlinear plant
+├── data/smpc_params.npz        # Stage 9   — offline SMPC parameters
+│
 ├── run.sh                      # WSL bridge launcher (Windows Git Bash → WSL2)
 ├── docs/
 │   ├── quadrotor_model.md
@@ -131,7 +138,8 @@ quadrotor_3d_nmpc/
 │   ├── stage6_trajectory.md
 │   ├── stage7a_obst_dist.md
 │   ├── stage7b_obst_dcbf.md
-│   └── stage8_tube.md
+│   ├── stage8_tube.md
+│   └── stage9_smpc.md
 ├── results/                    # Figures per stage (tracked)
 │   ├── stage1_basic/
 │   ├── stage2a_qih/
@@ -144,7 +152,8 @@ quadrotor_3d_nmpc/
 │   ├── stage6_trajectory/       # MHE run; nominal/ = verification run
 │   ├── stage7a_obst_dist/
 │   ├── stage7b_obst_dcbf/
-│   └── stage8_tube/
+│   ├── stage8_tube/
+│   └── stage9_smpc/
 └── c_generated_code/           # acados generated code (gitignored)
 ```
 
@@ -184,6 +193,8 @@ The project files live on the Windows drive; acados runs in WSL2. `run.sh` handl
 ./run.sh simulate_obst_dcbf.py [--sweep]    # Stage 7b        → results/stage7b_obst_dcbf/
 ./run.sh compute_tube_params.py       # Stage 8 offline       → data/tube_params.npz
 ./run.sh simulate_tube.py             # Stage 8               → results/stage8_tube/
+./run.sh compute_smpc_params.py       # Stage 9 offline       → data/smpc_params.npz
+./run.sh simulate_smpc.py             # Stage 9 (300 runs)    → results/stage9_smpc/
 
 ./run.sh observability_check.py       # observability at hover
 ./run.sh detectability_check.py       # re-derive the MHE certificate (needs cvxpy + MOSEK)
