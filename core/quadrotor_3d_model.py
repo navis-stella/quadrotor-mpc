@@ -14,6 +14,10 @@ Single source of the physics for every stage. Contains:
   - AcadosSimSolver plant               (one plant for every stage)
   - Tracking model x̃ = [x; p_a]          (Stage 5 tracking MPC: artificial
                                           reference as constant extra state)
+  - Motor dynamics                      (thrust COMMAND as input: MPC model
+                                          [x; f] with ḟ = (f_cmd − f)/τ_m,
+                                          plant [x; Ω] with rotor-speed loop
+                                          and f = k_f Ω²; check: core/motor_check)
 
 State (13):
     x = [px, py, pz, vx, vy, vz, qw, qx, qy, qz, p, q, r]
@@ -100,6 +104,8 @@ ND = 6         # 3 force (world) + 3 torque (body)
 NZ = NX + ND   # 19 — augmented state z = [x; d]   (EKF and MHE)
 NY = 10        # 3 pos + 4 quat + 3 angular vel  —  y = [p; q; ω]
 NW = NZ        # 19 — MHE process noise, additive on every derivative of z
+NM = 4         # motor states (thrusts f in the MPC model, rotor speeds Ω in the plant)
+NXM = NX + NM  # 17 — motor-dynamics state [x; f]  (plant: [x; Ω])
 
 IDX_Y = np.array([0, 1, 2, 6, 7, 8, 9, 10, 11, 12])   # y = z[IDX_Y]
 
@@ -123,6 +129,20 @@ F_MAX     = 3.0 * f_hover   # [N]     motor thrust limit (MPC bound, ss_target c
 OMEGA_MAX = 2.0             # [rad/s] certified body-rate envelope of the MHE
                             #         (detectability_check); the MPC keeps
                             #         |ωᵢ| ≤ 0.9·OMEGA_MAX so the plant stays in it
+
+# ─────────────────────────────────────────────────────────────────
+# Rotor / Motor Parameters  (motor-dynamics models, see the end of the file)
+# ─────────────────────────────────────────────────────────────────
+#   Chain on a real drone:  f_cmd → ω_cmd = √(f_cmd / k_f) → ESC speed loop → Ω → f = k_f Ω²
+#   The speed loop is modeled as a first-order lag Ω̇ = (ω_cmd − Ω) / τ_m.
+#   Ω (capital) = rotor speed, to keep it apart from the body rates ω = [p, q, r].
+TAU_MOTOR         = 0.03                         # [s]       closed speed-loop time constant
+OMEGA_ROTOR_MAX   = 1300.0                       # [rad/s]   full throttle (≈ 12 400 rpm)
+OMEGA_ROTOR_MIN   = 0.1 * OMEGA_ROTOR_MAX        # [rad/s]   idle — ESCs never stop the props in flight
+K_F               = F_MAX / OMEGA_ROTOR_MAX**2   # [N·s²]    thrust coefficient: k_f Ω_max² = F_MAX
+K_Q               = c_tau * K_F                  # [N·m·s²]  drag-torque coefficient: k_q Ω² = c_tau·f
+F_MIN             = K_F * OMEGA_ROTOR_MIN**2     # [N]       idle thrust = F_MAX / 100 (input lower bound)
+OMEGA_ROTOR_HOVER = np.sqrt(f_hover / K_F)       # [rad/s]   ≈ 751 rad/s (≈ 7 200 rpm)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -572,3 +592,198 @@ def create_tracking_model() -> AcadosModel:
     model.f_expl_expr = ca.vertcat(_build_f_expl(s), ca.SX.zeros(NA))
 
     return model
+
+
+# ═════════════════════════════════════════════════════════════════
+# Motor Dynamics  (thrust command as input, rotor lag as states)
+# ═════════════════════════════════════════════════════════════════
+# The models above take the thrusts f as the input: the rotors would follow
+# a command instantly. On a real drone the controller sends a thrust command
+# f_cmd, the ESC tracks the matching rotor speed, and the thrust follows
+# with the speed-loop lag. Two views of that lag:
+#
+#   Plant  (create_motor_plant)   rotor speeds Ω as states — the physics:
+#       ω_cmd = √(clip(f_cmd, F_MIN, F_MAX) / k_f)      inverse thrust map
+#       Ω̇     = (ω_cmd − Ω) / τ_m                       closed speed loop
+#       f     = k_f Ω²                                  thrust on the body
+#
+#   MPC model  (create_motor_model)   thrusts f as states — what the MPC sees:
+#       ḟ = (f_cmd − f) / τ_m
+#
+# Both agree to first order: ḟ = 2 k_f Ω Ω̇ = (f_cmd − f) · 2Ω / (ω_cmd + Ω),
+# and the factor 2Ω / (ω_cmd + Ω) is 1 for small steps. Large steps make
+# the plant slower when spinning up (ω_cmd > Ω: factor < 1) and faster when
+# spinning down (factor > 1) — a real, small plant–model mismatch, as on
+# hardware (core/motor_check: t63 = 35 ms to full throttle, 18 ms to idle,
+# 30 ms for small steps).
+#
+# Full state feedback measures Ω (ESC rpm telemetry) and hands the MPC
+# f = k_f Ω²  (motor_plant_to_model_state).
+
+def thrust_from_rotor(Omega):
+    """f = k_f Ω²  (NumPy or CasADi)."""
+    return K_F * Omega**2
+
+
+def rotor_from_thrust(f):
+    """Ω = √(f / k_f) for f ≥ 0  (NumPy)."""
+    return np.sqrt(np.maximum(f, 0.0) / K_F)
+
+
+def motor_plant_to_model_state(x_plant: np.ndarray) -> np.ndarray:
+    """[x (13); Ω (4)]  →  [x (13); f (4)]  — rotor speeds to thrusts."""
+    x_model = np.array(x_plant, dtype=float, copy=True)
+    x_model[NX:NXM] = thrust_from_rotor(x_plant[NX:NXM])
+    return x_model
+
+
+def motor_model_to_plant_state(x_model: np.ndarray) -> np.ndarray:
+    """[x (13); f (4)]  →  [x (13); Ω (4)]  — e.g. to start the plant at a model state."""
+    x_plant = np.array(x_model, dtype=float, copy=True)
+    x_plant[NX:NXM] = rotor_from_thrust(x_model[NX:NXM])
+    return x_plant
+
+
+def _build_motor_symbols():
+    """
+    Core symbols of the motor-dynamics MPC model: state [x (13); f (4)],
+    input u = f_cmd (4). The wrench comes from the thrust STATES f, so
+    _build_f_expl (which reads only x[0:13], T_total and tau) is reused as is.
+    """
+    x  = ca.SX.sym('x', NXM)
+    u  = ca.SX.sym('f_cmd', NU)
+    wrench = ca.mtimes(ca.DM(MIXER), x[NX:NXM])
+    return {'x': x, 'u': u, 'T_total': wrench[0], 'tau': wrench[1:4]}
+
+
+def _build_motor_f_expl(s, d=None):
+    """[ẋ; ḟ] = [f(x, f, d); (f_cmd − f) / τ_m]."""
+    f_state = s['x'][NX:NXM]
+    return ca.vertcat(_build_f_expl(s, d), (s['u'] - f_state) / TAU_MOTOR)
+
+
+def create_motor_model() -> AcadosModel:
+    """
+    Motor-dynamics MPC model, nominal (d = 0), no parameters:
+
+        state  [x (13); f (4)] = 17,    input  f_cmd (4)
+
+    Counterpart of create_nominal_model(). Input bounds for the OCP:
+    F_MIN ≤ f_cmd ≤ F_MAX (idle speed > 0, full throttle).
+    """
+    s = _build_motor_symbols()
+
+    model             = AcadosModel()
+    model.name        = 'quadrotor_3d_motor'
+    model.x           = s['x']
+    model.u           = s['u']
+    model.xdot        = ca.SX.sym('xdot', NXM)
+    model.f_expl_expr = _build_motor_f_expl(s)
+
+    return model
+
+
+def create_motor_disturbance_model() -> AcadosModel:
+    """
+    Motor-dynamics MPC model with the disturbance d (6) as runtime parameter
+    p — counterpart of create_disturbance_model(). The disturbance acts on
+    the body (forces, torques), not on the motors.
+    """
+    s = _build_motor_symbols()
+    d = ca.SX.sym('d', ND)
+
+    model             = AcadosModel()
+    model.name        = 'quadrotor_3d_motor_disturb'
+    model.x           = s['x']
+    model.u           = s['u']
+    model.p           = d
+    model.xdot        = ca.SX.sym('xdot', NXM)
+    model.f_expl_expr = _build_motor_f_expl(s, d)
+
+    return model
+
+
+def motor_hover_point():
+    """(x_hover (17), u_hover (4)) of the MPC model: level hover, f = f_cmd = f_hover."""
+    x_hover = np.zeros(NXM)
+    x_hover[6]      = 1.0
+    x_hover[NX:NXM] = f_hover
+    return x_hover, np.full(NU, f_hover)
+
+
+def get_motor_hover_linearization():
+    """
+    Continuous-time linearization of the motor MPC model (d = 0) at hover.
+
+    Structure:   A = [A_body  B_body ]     B = [   0    ]
+                     [  0    −I/τ_m  ]         [ I/τ_m  ]
+    (A_body, B_body = get_hover_linearization(): the old input matrix now
+    couples the thrust STATES into the body; the input reaches the body only
+    through the lag.)
+
+    Returns:
+        A_c (17×17), B_c (17×4)
+    """
+    s = _build_motor_symbols()
+    f = _build_motor_f_expl(s)
+    jac = ca.Function('jac_motor_hover', [s['x'], s['u']],
+                      [ca.jacobian(f, s['x']), ca.jacobian(f, s['u'])])
+    x_hover, u_hover = motor_hover_point()
+    A_c, B_c = jac(x_hover, u_hover)
+    return A_c.full(), B_c.full()
+
+
+def _build_motor_plant_model() -> AcadosModel:
+    """Plant ODE on [x (13); Ω (4)] with f_cmd as input and p = d (see section header)."""
+    x     = ca.SX.sym('x', NXM)
+    u     = ca.SX.sym('f_cmd', NU)
+    d     = ca.SX.sym('d', ND)
+    Omega = x[NX:NXM]
+
+    f_cmd_sat = ca.fmin(ca.fmax(u, F_MIN), F_MAX)           # ESC / motor envelope
+    omega_cmd = ca.sqrt(f_cmd_sat / K_F)                     # inverse thrust map
+    wrench    = ca.mtimes(ca.DM(MIXER), thrust_from_rotor(Omega))
+    s = {'x': x, 'u': u, 'T_total': wrench[0], 'tau': wrench[1:4]}
+
+    model             = AcadosModel()
+    model.name        = 'quadrotor_3d_motor_plant'
+    model.x           = x
+    model.u           = u
+    model.p           = d
+    model.xdot        = ca.SX.sym('xdot', NXM)
+    model.f_expl_expr = ca.vertcat(_build_f_expl(s, d),
+                                   (omega_cmd - Omega) / TAU_MOTOR)
+    return model
+
+
+def create_motor_plant(Ts: float) -> AcadosSimSolver:
+    """
+    AcadosSimSolver plant with motor dynamics: one call advances by Ts.
+
+        plant.set('x', x_plant)          # [x (13); Ω (4)]  rotor speeds in rad/s
+        plant.set('u', f_cmd)            # thrust command (saturated to [F_MIN, F_MAX] inside)
+        plant.set('p', d_true)           # disturbance, zero by default
+        plant.solve()
+        x_plant = quat_normalize(plant.get('x'))
+
+    Counterpart of create_disturbance_plant(); the controller's input is now
+    a COMMAND, the thrust on the body lags behind it. 4 RK4 substeps per call
+    resolve τ_m = 30 ms at Ts = 50 ms.
+    """
+    sim = AcadosSim()
+    sim.model = _build_motor_plant_model()
+    sim.solver_options.T = Ts
+    sim.solver_options.integrator_type = 'ERK'
+    sim.solver_options.num_stages = 4
+    sim.solver_options.num_steps  = 4
+    sim.parameter_values = np.zeros(ND)
+    sim.code_export_directory = build_path('c_generated_code')
+    return AcadosSimSolver(sim, json_file=build_path(f'{sim.model.name}_sim.json'))
+
+
+def motor_plant_hover_state() -> np.ndarray:
+    """Plant state [x (13); Ω (4)] at level hover: Ω = OMEGA_ROTOR_HOVER."""
+    x = np.zeros(NXM)
+    x[6]      = 1.0
+    x[NX:NXM] = OMEGA_ROTOR_HOVER
+    return x
