@@ -107,7 +107,7 @@ Run it from the tag:
 
 ```bash
 git checkout stage1
-./run.sh simulate_basic.py        # → results/stage1_basic/
+./run.sh stage1_basic/simulate_basic.py  # → results/stage1_basic/
 ```
 
 ## 4. Scenario
