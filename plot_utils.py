@@ -16,6 +16,8 @@ titles and paths.
     plot_dcbf_sweep                                  DCBF γ sweep   (Stage 7b)
     plot_tube_states, plot_tube_inputs,              x in z ⊕ S, ν in Mv ⊕ MKS,
     plot_tube_certificate                            e/h_S, w/w̄   (Stage 8)
+    plot_smpc_chance, plot_smpc_prediction           realizations vs chance
+                                                     constraints, κσ_k  (Stage 9)
 
 All functions require explicit title and save_path — no stage-specific
 defaults here, so each simulation script controls its own labeling.
@@ -993,6 +995,134 @@ def plot_tube_certificate(E_share:   np.ndarray,
     axes[2].set_xlabel('t [s]')
     axes[2].set_title('disturbance d_j / d̄_j (inside D)', fontsize=9)
     fig.colorbar(im, ax=axes[2], fraction=0.05, pad=0.02)
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+# ─────────────────────────────────────────────────────────────────
+# Stage 9: Stochastic MPC
+# ─────────────────────────────────────────────────────────────────
+def plot_smpc_chance(series:    list,
+                     Ts:        float,
+                     title:     str,
+                     save_path: str):
+    """
+    Stage 9: Monte Carlo realizations of the constrained outputs (2 × len(series)).
+
+    series   list of dicts, one column each:
+        Y          (n_mc, n+1)  y = G_j x of every closed-loop realization
+        g          float        constraint y ≤ g
+        beta       float        allowed violation probability
+        freq       (n+1,)       share of realizations with y > g at each sample
+        label      str          axis label of y
+        theta_inf  float        optional: stationary tightened bound g − κσ_∞
+        ylim       (lo, hi)     optional: zoom of the top panel onto the constraint
+
+    Top: every realization (thin), their mean and the 1 − β quantile — the
+    chance constraint says that the QUANTILE, not every curve, stays below g.
+    Bottom: the violation frequency against β with the 3σ band of a
+    frequency estimated from n_mc samples.
+    """
+    fig, axes = plt.subplots(2, len(series), figsize=(6.0 * len(series), 7.5),
+                             sharex='col', squeeze=False,
+                             gridspec_kw={'height_ratios': [2.2, 1.0]})
+    fig.suptitle(title, fontsize=14)
+    for c, s in enumerate(series):
+        Y, g, beta = s['Y'], s['g'], s['beta']
+        n_mc = Y.shape[0]
+        t    = np.arange(Y.shape[1]) * Ts
+        ax   = axes[0, c]
+        ax.plot(t, Y.T, color='tab:blue', lw=0.4, alpha=0.12)
+        ax.plot([], [], color='tab:blue', lw=0.8, alpha=0.6, label=f'{n_mc} realizations')
+        ax.plot(t, Y.mean(axis=0), 'k', lw=1.3, label='mean')
+        ax.plot(t, np.quantile(Y, 1.0 - beta, axis=0), color='tab:purple', lw=1.3,
+                label=f'{1.0 - beta:.2f} quantile')
+        ax.axhline(g, color='r', lw=1.3, label='constraint g')
+        if s.get('theta_inf') is not None:
+            ax.axhline(s['theta_inf'], color='darkorange', ls='--', lw=1.1,
+                       label='g − κσ_∞')
+        if s.get('ylim') is not None:
+            ax.set_ylim(*s['ylim'])
+        ax.set_ylabel(s['label'])
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc='lower right')
+
+        ax   = axes[1, c]
+        band = 3.0 * np.sqrt(beta * (1.0 - beta) / n_mc)
+        ax.axhspan(beta, beta + band, color='r', alpha=0.08, lw=0, label='3σ band of the estimate')
+        ax.axhline(beta, color='r', lw=1.3, label=f'β = {beta}')
+        ax.step(t, s['freq'], where='mid', color='tab:blue', lw=1.1, label='violation frequency')
+        ax.set_ylim(0.0, max(1.6 * (beta + band), 1.1 * s['freq'].max()))
+        ax.set_ylabel('share of runs with y > g')
+        ax.set_xlabel('t [s]')
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc='upper right')
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+def plot_smpc_prediction(y:         np.ndarray,
+                         preds:     list,
+                         sigma:     np.ndarray,
+                         g:         float,
+                         Ts:        float,
+                         kappas:    dict,
+                         method:    str,
+                         title:     str,
+                         save_path: str):
+    """
+    Stage 9: how the tightening acts inside one prediction (1 × 2).
+
+    y        (n+1,)   closed-loop output y = G_j x of one realization
+    preds    list of (t0, z (N+1,)) — predicted mean G_j z(k|t0) of the OCP at t0
+    sigma    (N+1,)   predicted std σ_k = √(G_j Σ_e(k) G_jᵀ)
+    g        float    constraint y ≤ g
+    kappas   dict     {name: κ} back-off factors to compare (right panel)
+    method   str      the key of kappas the controller uses
+
+    Left: each prediction with its band z + κσ_k — the OCP constraint
+    G_j z_k ≤ θ_k = g − κσ_k is 'the upper edge of the band stays below g'.
+    Right: the back-off κσ_k over the prediction time for every κ.
+    """
+    t   = np.arange(len(y)) * Ts
+    tau = np.arange(len(sigma)) * Ts
+    kap = kappas[method]
+    fig, axes = plt.subplots(1, 2, figsize=(15, 5), gridspec_kw={'width_ratios': [2.0, 1.0]})
+    fig.suptitle(title, fontsize=14)
+
+    ax = axes[0]
+    ax.plot(t, y, color='0.45', lw=1.0, label='closed loop (one realization)')
+    colors = plt.cm.viridis(np.linspace(0.0, 0.85, max(len(preds), 1)))
+    for (t0, z), col in zip(preds, colors):
+        ax.fill_between(t0 + tau, z, z + kap * sigma, color=col, alpha=0.25, lw=0)
+        ax.plot(t0 + tau, z, color=col, lw=1.4, label=f'mean z(k|t = {t0:g} s)')
+        ax.plot(t0 + tau, z + kap * sigma, color=col, lw=0.9, ls='--')
+        ax.plot(t0, z[0], 'o', color=col, ms=4)
+    ax.plot([], [], color='k', lw=0.9, ls='--', label=f'z + κσ_k  (κ = {kap:.3f})')
+    ax.axhline(g, color='r', lw=1.3, label='constraint g')
+    ax.set_xlabel('t [s]')
+    ax.set_ylabel('p_x − p_ref,x [m]')
+    ax.set_ylim(top=g + 0.15)
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=7, loc='lower right')
+
+    ax = axes[1]
+    for name, k_val in kappas.items():
+        ax.plot(tau, k_val * sigma, lw=1.5 if name == method else 1.0,
+                ls='-' if name == method else ':',
+                label=f'{name}: κ = {k_val:.3f}' + ('  (used)' if name == method else ''))
+    ax.set_xlabel('prediction time k·Ts [s]')
+    ax.set_ylabel('back-off g − θ_k = κσ_k [m]')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc='upper left')
 
     plt.tight_layout()
     _ensure_dir(save_path)
