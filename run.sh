@@ -24,7 +24,7 @@
 set -euo pipefail
 export MSYS_NO_PATHCONV=1
 export WSLENV="${WSLENV:+$WSLENV:}QUAD_PLOTS/u"   # forward QUAD_PLOTS into WSL
-if [[ $# -gt 0 && "$1" == */*.py ]]; then
+if [[ $# -gt 0 && "$1" == */*.py && "$1" != /* ]]; then   # relative paths only
     mod="${1%.py}"; mod="${mod#./}"; shift
     set -- -m "${mod//\//.}" "$@"
 fi
