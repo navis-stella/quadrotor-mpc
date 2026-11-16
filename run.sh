@@ -28,4 +28,5 @@ if [[ $# -gt 0 && "$1" == */*.py ]]; then
     mod="${1%.py}"; mod="${mod#./}"; shift
     set -- -m "${mod//\//.}" "$@"
 fi
-exec wsl.exe -e bash /home/celestialnavis/acados_run.sh "$@"
+# $HOME is expanded inside WSL, so the launcher path holds no user name
+exec wsl.exe -e bash -c 'exec "$HOME/acados_run.sh" "$@"' run.sh "$@"
