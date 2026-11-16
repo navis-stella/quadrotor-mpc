@@ -22,7 +22,7 @@ discrete-time control barrier function.
 | Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4, shifted and projected warm start |
 | Reference | Stage 6 helix + flatness map, unchanged (2 m/s, 3 turns, 22.85 s) |
 | Obstacles | 3 infinite vertical cylinders, radius 0.2 m |
-| Entry point | `./run.sh simulate_obst_dist.py` → `results/stage7a_obst_dist/` |
+| Entry point | `./run.sh stage7_obstacle/simulate_obst_dist.py` → `results/stage7a_obst_dist/` |
 
 ---
 
@@ -453,8 +453,8 @@ reports a dimension error.
 | `plot_utils.py` | `plot_obstacle_topview()`, `plot_obstacle_clearance()` (new); `plot_3d_trajectory(..., cylinders=)` |
 
 ```bash
-./run.sh simulate_obst_dist.py                   # → results/stage7a_obst_dist/
-QUAD_PLOTS=none ./run.sh simulate_obst_dist.py   # save only, no windows
+./run.sh stage7_obstacle/simulate_obst_dist.py   # → results/stage7a_obst_dist/
+QUAD_PLOTS=none ./run.sh stage7_obstacle/simulate_obst_dist.py  # save only, no windows
 ```
 
 ## References

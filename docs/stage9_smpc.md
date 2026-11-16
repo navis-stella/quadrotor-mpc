@@ -17,7 +17,7 @@ As in Stage 8, the controller is linear and the plant is the **nonlinear** quadr
 | Horizon | $N = 40$, $T = 2$ s |
 | Solver | acados `SQP` (one step — the OCP is a QP), `PARTIAL_CONDENSING_HPIPM`, `DISCRETE` dynamics |
 | Offline | `compute_smpc_params.py` → `data/smpc_params.npz` |
-| Entry point | `./run.sh simulate_smpc.py` → `results/stage9_smpc/` |
+| Entry point | `./run.sh stage9_smpc/simulate_smpc.py` → `results/stage9_smpc/` |
 
 ---
 
@@ -218,10 +218,10 @@ time for both factors.
 | `plot_utils.py` | `plot_smpc_chance()`, `plot_smpc_prediction()` (new) |
 
 ```bash
-./run.sh compute_smpc_params.py             # → data/smpc_params.npz
-./run.sh compute_smpc_params.py --check     # self-test: covariance and coverage on the nonlinear plant
-./run.sh simulate_smpc.py                   # → results/stage9_smpc/ (300 runs, ≈ 5 min)
-QUAD_PLOTS=none ./run.sh simulate_smpc.py   # save only, no windows
+./run.sh stage9_smpc/compute_smpc_params.py  # → data/smpc_params.npz
+./run.sh stage9_smpc/compute_smpc_params.py --check  # self-test: covariance and coverage on the nonlinear plant
+./run.sh stage9_smpc/simulate_smpc.py       # → results/stage9_smpc/ (300 runs, ≈ 5 min)
+QUAD_PLOTS=none ./run.sh stage9_smpc/simulate_smpc.py  # save only, no windows
 ```
 
 ## References

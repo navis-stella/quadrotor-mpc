@@ -13,7 +13,7 @@ get.
 | Horizon / solver | $N = 20$, $T = 1$ s, $T_s = 0.05$ s; acados `SQP_RTI`, projected shifted warm start |
 | Obstacle constraint | $`h_j(x_{i+1}) \ge (1-\gamma)\, h_j(x_i)`$, $i = 0, \dots, N-1$, soft |
 | Main run | $\gamma = 0.2$ |
-| Entry point | `./run.sh simulate_obst_dcbf.py [--sweep]` → `results/stage7b_obst_dcbf/` |
+| Entry point | `./run.sh stage7_obstacle/simulate_obst_dcbf.py [--sweep]` → `results/stage7b_obst_dcbf/` |
 
 ---
 
@@ -159,7 +159,7 @@ The states look like those of 7a with wider swerves. The thrusts stay far from b
 
 ## 5. Effect of $\gamma$ (`--sweep`)
 
-`python simulate_obst_dcbf.py --sweep` runs $\gamma \in \{1, 0.5, 0.2, 0.1, 0.05\}$ on the same scene:
+`python -m stage7_obstacle.simulate_obst_dcbf --sweep` runs $\gamma \in \{1, 0.5, 0.2, 0.1, 0.05\}$ on the same scene:
 
 | $\gamma$ | min gap [mm] | max slack [m²] | avoidance starts before P1 [s] | node-0 row active | $\lVert p - p_r \rVert$ RMS / max [mm] | samples at the rate bound | largest one-sample change of a body rate [rad/s] | max tilt |
 |---|---|---|---|---|---|---|---|---|
@@ -214,14 +214,14 @@ run, the same constraint); `print_sweep` prints the others.
 
 | File | Role |
 |---|---|
-| `ocp_config_obstacle.py` | `rk4_step()`, `dcbf_pillars()`; `add_pillar_constraints(..., gamma=)` and `create_solver(..., gamma=)` build the DCBF form; `Z_L1_DCBF`; `obstacle_slack(..., dcbf=True)` |
+| `ocp_config_obstacle.py` | `dcbf_pillars()` (with `rk4_step()` from `core/integrators.py`); `add_pillar_constraints(..., gamma=)` and `create_solver(..., gamma=)` build the DCBF form; `Z_L1_DCBF`; `obstacle_slack(..., dcbf=True)` |
 | `simulate_obst_dcbf.py` | main run ($\gamma = 0.2$) and `--sweep`; metrics `swerve_lead()`, `sweep_row()`, `print_sweep()` |
 | `obstacle_sim_config.py` | scene and closed loop shared with Stage 7a: `simulate(gamma=)`, `summarize()`, `make_figures()` |
 | `plot_utils.py` | `plot_dcbf_sweep()` (new) |
 
 ```bash
-./run.sh simulate_obst_dcbf.py            # γ = 0.2   → results/stage7b_obst_dcbf/
-./run.sh simulate_obst_dcbf.py --sweep    # γ sweep   → results/stage7b_obst_dcbf/gamma_sweep.png
+./run.sh stage7_obstacle/simulate_obst_dcbf.py  # γ = 0.2   → results/stage7b_obst_dcbf/
+./run.sh stage7_obstacle/simulate_obst_dcbf.py --sweep  # γ sweep   → results/stage7b_obst_dcbf/gamma_sweep.png
 ```
 
 ## References

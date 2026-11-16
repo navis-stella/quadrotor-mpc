@@ -226,7 +226,7 @@ flowchart TD
 
 ```bash
 git checkout stage3
-./run.sh simulate_offsetfree.py   # → results/stage3_offsetfree/
+./run.sh stage3_offsetfree/simulate_offsetfree.py  # → results/stage3_offsetfree/
 ```
 
 ## 4. Scenario

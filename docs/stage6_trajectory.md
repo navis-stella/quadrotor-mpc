@@ -20,7 +20,7 @@ second run (`--nominal`) verifies the controller alone with full state feedback.
 | Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4, shifted warm start |
 | Reference | helix, $R = 2$ m, 5 m climb over 3 turns, 2 m/s, 22.85 s (`reference_generate.py`) |
 | Estimator | certified Lyapunov MHE of Stage 4b, unchanged (`state_est_mhe.py`) |
-| Entry point | `./run.sh simulate_trajectory.py [--nominal]` → `results/stage6_trajectory/` |
+| Entry point | `./run.sh stage6_trajectory/simulate_trajectory.py [--nominal]` → `results/stage6_trajectory/` |
 
 ---
 
@@ -81,7 +81,7 @@ motor thrusts ([§3](#3-differential-flatness-reference_flatnesspy)), and a jump
 The acceleration peaks at the end of the spiral-out, where the radius and the phase rate are both
 still growing. In cruise $\lvert a \rvert = R\omega^2 = 2$ m/s², pointing to the helix axis.
 
-`python reference_generate.py` runs a self-test: rest at $t = 0$, continuity up to snap at both
+`python -m stage6_trajectory.reference_generate` runs a self-test: rest at $t = 0$, continuity up to snap at both
 junctions, and the analytic derivative chain against central differences.
 
 ## 3. Differential flatness (`reference_flatness.py`)
@@ -128,7 +128,7 @@ prediction model. The disturbance estimate $\hat d$ enters steps 1 and 4, so und
 the reference tilts and the thrusts change such that the helix is still flown by
 $f(x, u, \hat d)$.
 
-**Verification.** `python reference_flatness.py` flies $u_r(t)$ **open loop** through the CasADi
+**Verification.** `python -m stage6_trajectory.reference_flatness` flies $u_r(t)$ **open loop** through the CasADi
 model (RK4, 2 ms) and compares the result with $x_r(t)$:
 
 | Case | max position error | max attitude error |
@@ -363,11 +363,11 @@ WSL and not reproducible; the typical calls stay far within the budget.
 | `plot_utils.py` | `plot_tracking_error()` (new); `plot_states` / `plot_3d_trajectory` accept a time-varying reference and noisy measurements, `plot_inputs` the feedforward $u_r$ |
 
 ```bash
-./run.sh reference_generate.py --plot           # self-test + results/stage6_trajectory/helix_reference.png
-./run.sh reference_flatness.py                  # flatness self-test (open-loop flight)
-./run.sh simulate_trajectory.py                 # MHE run   → results/stage6_trajectory/
-./run.sh simulate_trajectory.py --nominal       # nominal   → results/stage6_trajectory/nominal/
-QUAD_PLOTS=none ./run.sh simulate_trajectory.py # save only, no windows
+./run.sh stage6_trajectory/reference_generate.py --plot  # self-test + results/stage6_trajectory/helix_reference.png
+./run.sh stage6_trajectory/reference_flatness.py  # flatness self-test (open-loop flight)
+./run.sh stage6_trajectory/simulate_trajectory.py  # MHE run   → results/stage6_trajectory/
+./run.sh stage6_trajectory/simulate_trajectory.py --nominal  # nominal   → results/stage6_trajectory/nominal/
+QUAD_PLOTS=none ./run.sh stage6_trajectory/simulate_trajectory.py # save only, no windows
 ```
 
 ## References
