@@ -44,8 +44,8 @@ import casadi as ca
 from scipy.linalg import (solve_continuous_are, solve_continuous_lyapunov,
                            inv, norm, cholesky)
 
-from core.quadrotor_3d_model import (get_hover_linearization, create_nominal_model,
-                                     f_hover, F_MAX, NX, NU)
+from core.quadrotor_model import (get_hover_linearization, create_nominal_model,
+                                  f_hover, F_MAX, NX, NU)
 
 
 # ─────────────────────────────────────────────────────────────────

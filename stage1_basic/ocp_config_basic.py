@@ -5,8 +5,8 @@ Creates and returns the acados OCP solver.
 
 Stage 1:  W_e = Q   (simple terminal cost, no terminal constraint)
 
-Prediction model: the motor-dynamics model (quadrotor_3d_model.
-create_motor_model, d = 0) — 17 states [x (13); f (4)], input the thrust
+Prediction model: the motor-dynamics model (quadrotor_model.
+create_thrust_lag_model, d = 0) — 17 states [x (13); f (4)], input the thrust
 COMMAND f_cmd, rotor thrusts following with ḟ = (f_cmd − f)/τ_m.
 The terminal cost is simply Q — no DARE or Lyapunov computation.
 This is the simplest possible NMPC formulation: it works, but
@@ -18,7 +18,7 @@ import casadi as ca
 from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from core.quadrotor_3d_model import create_motor_model, f_hover, F_MIN, F_MAX, NX, NXM, NU
+from core.quadrotor_model import create_thrust_lag_model, f_hover, F_MIN, F_MAX, NX, NXM, NU
 from core.codegen import build_path
 
 
@@ -71,7 +71,7 @@ def create_solver(x_ref:     np.ndarray,
     Returns:
         AcadosOcpSolver ready to be called in the simulation loop
     """
-    model = create_motor_model()
+    model = create_thrust_lag_model()
     ocp   = AcadosOcp()
     ocp.model = model
 

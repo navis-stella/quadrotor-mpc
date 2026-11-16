@@ -6,7 +6,7 @@ EKF for the 3D quadrotor with augmented disturbance state.
     State:        z = [x(13); d(6)]  ∈ R^19  (augmented)
     Measurement:  y = [p; q; ω]      ∈ R^10  (position, quaternion, angular velocity)
 
-Model sources (quadrotor_3d_model) — shared with the Stage 4b MHE:
+Model sources (quadrotor_model) — shared with the Stage 4b MHE:
     - Augmented dynamics  (get_augmented_dynamics), ḋ = 0
     - Measurement model   (get_measurement_function)
 
@@ -21,7 +21,7 @@ time does not silently change how fast d̂ may move.
 
 import numpy as np
 
-from core.quadrotor_3d_model import (
+from core.quadrotor_model import (
     get_augmented_dynamics,
     get_measurement_function,
     quat_normalize,

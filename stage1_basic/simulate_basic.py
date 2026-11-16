@@ -13,8 +13,8 @@ Full state feedback: the rotor speeds Ω are measured (ESC rpm telemetry)
 and handed to the MPC as thrusts f = k_f Ω².
 
 Imports:
-    quadrotor_3d_model.py   → create_motor_plant() (p = 0 → no disturbance),
-                              motor_plant_hover_state(), motor_plant_to_model_state(),
+    quadrotor_model.py      → create_rotor_plant() (p = 0 → no disturbance),
+                              rotor_plant_hover_state(), rotor_to_thrust_state(),
                               thrust_from_rotor(), quat_normalize()
     ocp_config_basic.py     → create_solver()
     plot_utils.py           → plot_states(), plot_inputs(), plot_3d_trajectory()
@@ -25,8 +25,8 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 
 import numpy as np
 
-from core.quadrotor_3d_model       import (create_motor_plant, motor_plant_hover_state,
-                                           motor_plant_to_model_state, thrust_from_rotor,
+from core.quadrotor_model          import (create_rotor_plant, rotor_plant_hover_state,
+                                           rotor_to_thrust_state, thrust_from_rotor,
                                            quat_normalize, F_MIN, F_MAX, NX, NXM, NU)
 from stage1_basic.ocp_config_basic import create_solver
 from core.plot_utils               import plot_states, plot_inputs, plot_3d_trajectory
@@ -74,14 +74,14 @@ def simulate(x0:        np.ndarray,
     print('Solver ready.')
 
     print('Creating plant simulator...')
-    plant = create_motor_plant(Ts / N_SUB)          # p = 0: no disturbance in Stage 1
+    plant = create_rotor_plant(Ts / N_SUB)          # p = 0: no disturbance in Stage 1
     print('Plant ready.\n')
 
     X     = np.zeros((n_sim + 1, NXM))
     U     = np.zeros((n_sim,     NU))
     F_act = np.zeros((n_sim * N_SUB + 1, NU))
     x_plant  = x0.copy()
-    X[0]     = motor_plant_to_model_state(x_plant)
+    X[0]     = rotor_to_thrust_state(x_plant)
     F_act[0] = X[0, NX:]
 
     for k in range(n_sim):
@@ -106,7 +106,7 @@ def simulate(x0:        np.ndarray,
             plant.solve()
             x_plant = quat_normalize(plant.get('x'))
             F_act[k * N_SUB + j + 1] = thrust_from_rotor(x_plant[NX:])
-        X[k+1] = motor_plant_to_model_state(x_plant)
+        X[k+1] = rotor_to_thrust_state(x_plant)
 
         if k % 20 == 0:
             print(f'  step {k:3d}/{n_sim}  |  '
@@ -131,7 +131,7 @@ if __name__ == '__main__':
     ])
 
     # initial state: hovering at the origin — level, stationary, rotors at hover speed
-    x0 = motor_plant_hover_state()
+    x0 = rotor_plant_hover_state()
 
     X, U, F_act, Ts = simulate(x0, x_ref, N=20, T_horizon=1.0, T_sim=5.0)
 

@@ -45,7 +45,7 @@ import casadi as ca
 from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel, ACADOS_INFTY
 
-from core.quadrotor_3d_model import NU
+from core.quadrotor_model import NU
 from stage8_tube.compute_tube_params import NE
 from stage9_smpc.compute_smpc_params import load_smpc_params
 from core.codegen import build_path
@@ -63,7 +63,7 @@ def create_nominal_linear_model(A: np.ndarray, B: np.ndarray) -> AcadosModel:
     z = ca.SX.sym('z', NE)
     v = ca.SX.sym('v', NU)
     model               = AcadosModel()
-    model.name          = 'quadrotor_3d_smpc'
+    model.name          = 'quadrotor_smpc'
     model.x             = z
     model.u             = v
     model.disc_dyn_expr = ca.mtimes(ca.DM(A), z) + ca.mtimes(ca.DM(B), v)

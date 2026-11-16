@@ -59,7 +59,7 @@ import casadi as ca
 from scipy.linalg import solve_discrete_are
 from scipy.stats import norm
 
-from core.quadrotor_3d_model import f_hover, F_MAX, NU, ND
+from core.quadrotor_model import f_hover, F_MAX, NU, ND
 from stage8_tube.compute_tube_params import NE, NAMES, TS, linear_model, residual_function
 
 

@@ -28,7 +28,7 @@ Validation scenario:
         → Position converges back to reference.
 
 Imports:
-    quadrotor_3d_model.py       → create_disturbance_plant(), quat_normalize(),
+    quadrotor_model.py          → create_disturbance_plant(), quat_normalize(),
                                    f_hover, NX, NU, ND
     ocp_config_offsetfree.py    → create_solver(), set_disturbance_param(), set_reference()
     ekf_aug.py                  → AugEKF, get_default_ekf_tuning()
@@ -41,7 +41,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 
 import numpy as np
 
-from core.quadrotor_3d_model import (
+from core.quadrotor_model import (
     create_disturbance_plant, quat_normalize,
     f_hover, NX, NU, ND,
 )

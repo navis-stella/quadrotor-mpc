@@ -12,7 +12,7 @@ estimator:
     simulate_compare.py  loads both saved runs → comparison figure + table
 
 Shared by both runs — the estimator is the only difference:
-    augmented model     quadrotor_3d_model   (z = [x; d], ḋ = 0)
+    augmented model     quadrotor_model      (z = [x; d], ḋ = 0)
     measurement         sensor_simulator     (y = [p; q; ω], MOCAP_NOISE_STD, seed)
     controller          ocp_config_offsetfree + ss_target  (d̂ in the prediction,
                                                             target under d̂)
@@ -65,7 +65,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_3d_model                 import (
+from core.quadrotor_model                    import (
     create_disturbance_plant, quat_normalize, project_measurement,
     OMEGA_MAX, NX, NU, ND, NZ,
 )

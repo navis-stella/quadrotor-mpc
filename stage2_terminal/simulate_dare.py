@@ -15,7 +15,7 @@ Design rationale:
     structure without infeasibility risk from a tight terminal set.
 
 Imports:
-    quadrotor_3d_model.py        → create_disturbance_plant() (p = 0 → nominal plant),
+    quadrotor_model.py           → create_disturbance_plant() (p = 0 → nominal plant),
                                     quat_normalize(), NX, NU
     ocp_config_dare.py           → create_solver()  (Stage 2b, DARE only)
     plot_utils.py                → plot_states(), plot_inputs(), plot_3d_trajectory()
@@ -26,7 +26,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 
 import numpy as np
 
-from core.quadrotor_3d_model         import (create_disturbance_plant, quat_normalize,
+from core.quadrotor_model            import (create_disturbance_plant, quat_normalize,
                                              NX, NU)
 from stage2_terminal.ocp_config_dare import create_solver
 from core.plot_utils                 import plot_states, plot_inputs, plot_3d_trajectory

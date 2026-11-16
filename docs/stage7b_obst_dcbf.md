@@ -69,7 +69,7 @@ $`h_j(F(x_i, u_i)) = h_j(x_{i+1})`$ exactly.
 | rows $i = 1 \dots N-1$ | `con_h_expr` = $c(x, u)$ |
 | no terminal row | $`h_j(x_N) \ge (1-\gamma) h_j(x_{N-1})`$ is the $i = N-1$ row |
 | slacks | stage 0 has no $\lvert\omega\rvert$ slack, so `zl_0` holds only the pillar weights; stages $1 \dots N-1$ append them after the $\lvert\omega\rvert$ slacks |
-| one solver per $\gamma$ | model name `quadrotor_3d_obst_dcbf_g0p2` etc., so several $\gamma$ can run in one process |
+| one solver per $\gamma$ | model name `quadrotor_obst_dcbf_g0p2` etc., so several $\gamma$ can run in one process |
 
 `create_solver(pillars, ..., gamma=None)` builds 7a, and `gamma=γ` builds 7b. The closed loop
 `obstacle_sim_config.simulate(gamma=)` is shared, including the warm start that projects guess nodes

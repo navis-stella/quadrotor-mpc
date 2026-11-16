@@ -21,7 +21,7 @@ Checked (the guarantee of compute_tube_params):
 Expected (Mayne et al. 2005): z → 0 (nominal MPC), so x → S around the target.
 
 Imports:
-    quadrotor_3d_model.py   → create_disturbance_plant(), quat_normalize(), MIXER
+    quadrotor_model.py      → create_disturbance_plant(), quat_normalize(), MIXER
     compute_tube_params.py  → load_tube_params(), reduce_state(), tube_gauge()
     ocp_config_tube.py      → create_solver(), solve_nominal(), shifted_candidate()
     plot_utils.py           → plot_tube_states/inputs/certificate, plot_states,
@@ -37,8 +37,8 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_3d_model import (create_disturbance_plant, quat_normalize, MIXER,
-                                     f_hover, NX, NU, ND)
+from core.quadrotor_model import (create_disturbance_plant, quat_normalize, MIXER,
+                                  f_hover, NX, NU, ND)
 from stage8_tube.compute_tube_params import NE, NAMES, load_tube_params, reduce_state, tube_gauge
 import stage8_tube.ocp_config_tube as tube
 from core.plot_utils import (plot_tube_states, plot_tube_inputs, plot_tube_certificate,

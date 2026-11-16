@@ -13,7 +13,7 @@ import numpy as np
 from scipy.linalg import solve_discrete_are
 from scipy.signal import cont2discrete
 
-from core.quadrotor_3d_model import get_hover_linearization, NX, NU
+from core.quadrotor_model import get_hover_linearization, NX, NU
 
 
 # ─────────────────────────────────────────────────────────────────

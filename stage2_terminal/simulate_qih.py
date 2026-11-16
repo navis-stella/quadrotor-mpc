@@ -11,7 +11,7 @@ Key addition over Stage 1 simulation:
     set constraint is active, satisfied, or violated (slack > 0).
 
 Imports:
-    quadrotor_3d_model.py       → plant (p = 0 → nominal), utilities
+    quadrotor_model.py          → plant (p = 0 → nominal), utilities
     ocp_config_qih.py           → QIH-NMPC solver + get_qih_params()  (Stage 2a)
     plot_utils.py               → shared plotting functions
 """
@@ -21,7 +21,7 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 
 import numpy as np
 
-from core.quadrotor_3d_model        import (create_disturbance_plant,
+from core.quadrotor_model           import (create_disturbance_plant,
                                             quat_normalize,
                                             NX, NU)
 from stage2_terminal.ocp_config_qih import create_solver, get_qih_params

@@ -49,7 +49,7 @@ import argparse
 import time
 import numpy as np
 
-from core.quadrotor_3d_model                   import (create_disturbance_plant, quat_normalize,
+from core.quadrotor_model                      import (create_disturbance_plant, quat_normalize,
                                                        project_measurement, OMEGA_MAX, F_MAX, NX, NU, ND, NY)
 from stage6_trajectory.reference_generate      import HelixReference
 from stage6_trajectory.reference_flatness      import flat_to_state_input

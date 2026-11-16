@@ -35,7 +35,7 @@ acados mapping:
     This is why any reference sequence keeps the OCP recursively feasible.
 
     Terminal equality on 12 of 13 states (IDX_TERM_EQ, qw left out — see
-    quadrotor_3d_model.py; including it would violate LICQ).
+    quadrotor_model.py; including it would violate LICQ).
 
 Cost weighting note:
     acados scales stage costs by the step length Ts (cost_scaling default),
@@ -48,8 +48,8 @@ import casadi as ca
 from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from core.quadrotor_3d_model import (create_tracking_model, steady_state_map,
-                                     F_MAX, NX, NU, NA, NXA, IDX_TERM_EQ)
+from core.quadrotor_model import (create_tracking_model, steady_state_map,
+                                  F_MAX, NX, NU, NA, NXA, IDX_TERM_EQ)
 from core.codegen import build_path
 
 # ─────────────────────────────────────────────────────────────────
@@ -95,7 +95,7 @@ def create_solver(N:          int   = 20,
                             get_artificial_reference
     """
     model = create_tracking_model()
-    model.name = f'quadrotor_3d_tracking{tag}'
+    model.name = f'quadrotor_tracking{tag}'
     r = ca.SX.sym('r', NA)
     model.p = r                                       # external reference
 

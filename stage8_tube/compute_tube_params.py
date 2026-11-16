@@ -77,9 +77,9 @@ from scipy.signal import cont2discrete
 from scipy.linalg import solve_discrete_are
 from scipy.optimize import linprog
 
-from core.quadrotor_3d_model import (create_disturbance_model, create_disturbance_plant,
-                                     get_hover_linearization, quat_normalize,
-                                     MIXER, f_hover, F_MAX, NX, NU, ND)
+from core.quadrotor_model import (create_disturbance_model, create_disturbance_plant,
+                                  get_hover_linearization, quat_normalize,
+                                  MIXER, f_hover, F_MAX, NX, NU, ND)
 from core.integrators import rk4_step          # the plant's ERK4, one step
 
 

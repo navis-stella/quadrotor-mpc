@@ -13,7 +13,7 @@ through the LMI condition of Theorem 2 in
     systems", arXiv:2305.06614v2, 2024.
 
 System — the augmented model shared with the EKF, taken from
-quadrotor_3d_model (no local copy of the dynamics):
+quadrotor_model (no local copy of the dynamics):
     ż = f(z, u, w) = [f(x, u, d); 0] + w       create_mhe_model()
     y = h(z)       = [p; q; ω]                 measurement_expr()
 
@@ -101,7 +101,7 @@ import numpy as np
 import casadi as ca
 import cvxpy as cp
 
-from core.quadrotor_3d_model import (
+from core.quadrotor_model import (
     create_mhe_model, measurement_expr,
     f_hover, F_MAX, OMEGA_MAX, NU, NX,
 )

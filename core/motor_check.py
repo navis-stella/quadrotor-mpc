@@ -1,7 +1,7 @@
 """
 motor_check.py — All Stages Motor Dynamics Check
 ================================================
-Checks the motor-dynamics models of quadrotor_3d_model before any stage
+Checks the motor-dynamics models of quadrotor_model before any stage
 uses them:
 
     1. Hover is an equilibrium of the MPC model [x; f] and of the plant [x; Ω].
@@ -19,9 +19,9 @@ Run:  python -m core.motor_check     → results/motor_dynamics/step_response.pn
 import numpy as np
 import casadi as ca
 
-from core.quadrotor_3d_model import (
-    create_motor_model, _build_motor_plant_model, create_motor_plant,
-    motor_hover_point, motor_plant_hover_state, get_motor_hover_linearization,
+from core.quadrotor_model import (
+    create_thrust_lag_model, _build_rotor_plant_model, create_rotor_plant,
+    thrust_lag_hover_point, rotor_plant_hover_state, get_thrust_lag_hover_linearization,
     get_hover_linearization, thrust_from_rotor, quat_normalize,
     TAU_MOTOR, F_MIN, F_MAX, K_F, OMEGA_ROTOR_MIN, OMEGA_ROTOR_MAX,
     OMEGA_ROTOR_HOVER, f_hover, NX, NXM, NU, ND,
@@ -41,14 +41,14 @@ def _ok(flag: bool) -> str:
 # 1. Hover equilibrium
 # ─────────────────────────────────────────────────────────────────
 def check_hover() -> bool:
-    mdl = create_motor_model()
+    mdl = create_thrust_lag_model()
     f_m = ca.Function('f_m', [mdl.x, mdl.u], [mdl.f_expl_expr])
-    x_h, u_h = motor_hover_point()
+    x_h, u_h = thrust_lag_hover_point()
     r_model = np.abs(f_m(x_h, u_h).full()).max()
 
-    plt_mdl = _build_motor_plant_model()
+    plt_mdl = _build_rotor_plant_model()
     f_p = ca.Function('f_p', [plt_mdl.x, plt_mdl.u, plt_mdl.p], [plt_mdl.f_expl_expr])
-    r_plant = np.abs(f_p(motor_plant_hover_state(), u_h, np.zeros(ND)).full()).max()
+    r_plant = np.abs(f_p(rotor_plant_hover_state(), u_h, np.zeros(ND)).full()).max()
 
     ok = r_model < 1e-12 and r_plant < 1e-9
     print('─── 1. Hover equilibrium ──────────────────────────')
@@ -62,7 +62,7 @@ def check_hover() -> bool:
 # 2. Linearization structure
 # ─────────────────────────────────────────────────────────────────
 def check_linearization() -> bool:
-    A, B = get_motor_hover_linearization()
+    A, B = get_thrust_lag_hover_linearization()
     A_b, B_b = get_hover_linearization()
     I = np.eye(NU)
     errs = {
@@ -88,7 +88,7 @@ def step_response(plant, f_cmd: float):
     """Plant thrust k_f Ω(t) and MPC-model thrust after a step hover → f_cmd."""
     n = int(round(T_STEP / TS_CHECK)) + 1
     t = np.arange(n) * TS_CHECK
-    x = motor_plant_hover_state()
+    x = rotor_plant_hover_state()
     f_plant = np.empty(n)
     f_plant[0] = f_hover
     for k in range(1, n):
@@ -109,7 +109,7 @@ def t63(t, f):
 
 
 def check_steps() -> bool:
-    plant = create_motor_plant(TS_CHECK)
+    plant = create_rotor_plant(TS_CHECK)
     specs = [('small step +10 %',     1.1 * f_hover),
              ('full throttle',        F_MAX),
              ('cut to idle (f_cmd=0)', 0.0)]

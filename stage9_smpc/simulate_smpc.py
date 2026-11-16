@@ -26,7 +26,7 @@ frequency stays BELOW β — the constraint of step k = 1 alone would give
 exactly β, the later steps (larger σ_k) push the plan further back.
 
 Imports:
-    quadrotor_3d_model.py   → create_disturbance_plant(), quat_normalize()
+    quadrotor_model.py      → create_disturbance_plant(), quat_normalize()
     compute_tube_params.py  → reduce_state()  (deviation coordinates)
     compute_smpc_params.py  → load_smpc_params(), backoff_factor(), row_std()
     ocp_config_smpc.py      → create_solver(), solve(), shifted_plan(), warm_start()
@@ -43,8 +43,8 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_3d_model import (create_disturbance_plant, quat_normalize,
-                                     f_hover, F_MAX, NX, NU, ND)
+from core.quadrotor_model import (create_disturbance_plant, quat_normalize,
+                                  f_hover, F_MAX, NX, NU, ND)
 from stage8_tube.compute_tube_params import NE, reduce_state
 from stage9_smpc.compute_smpc_params import load_smpc_params, backoff_factor, row_std
 import stage9_smpc.ocp_config_smpc as smpc
