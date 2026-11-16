@@ -17,6 +17,7 @@ results with plots. This README gives the overview.
 |----------|-------|
 | States (13) | position, velocity (world frame), unit quaternion (scalar-first), body rates |
 | Inputs (4) | individual motor thrusts, $0 \le f_i \le 3 f_{\text{hover}} \approx 7.35$ N |
+| Motor dynamics (migrated: Stage 1) | the controller sends thrust **commands**; the plant has rotor speeds $\Omega$ as states (inverse thrust map, ESC speed loop $\tau_m = 30$ ms, $f = k_f \Omega^2$, idle speed), the MPC predicts $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ on 17 states. Stages not yet migrated still use the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
 | Layout | `+` configuration, hover thrust $f_{\text{hover}} = mg/4 \approx 2.45$ N |
 | Disturbance (Stages 3–4) | constant force (world frame) and torque (body frame), $d \in \mathbb{R}^6$ |
 | Reference trajectory (Stage 6) | analytic helix, mapped by differential flatness to a full state and input reference $(x_r(t), u_r(t))$ |
@@ -47,7 +48,7 @@ Equations of motion, disturbance model and quaternion conventions →
 
 | Stage | Result |
 |-------|--------|
-| 1 | Hover-to-hover step converges in about 2 s with no visible offset, but $W_e = Q$ gives no stability certificate. |
+| 1 | Hover-to-hover step with motor dynamics converges in about 2 s with no visible offset; the MPC leads the 30 ms rotor lag with its commands. $W_e = Q$ gives no stability certificate. |
 | 2a | The certified terminal set is tiny ($\alpha \approx 10^{-4}$); the trajectory enters it only after 2.3 s, so the guarantee covers just the final approach. |
 | 2b | Same nominal trajectory as Stage 1, now with the LQR cost-to-go as terminal cost; used as the terminal cost from Stage 3 on. |
 | 3 | Under wind and a 30% mass error, standard NMPC settles 58 / −36 / −79 mm off target; offset-free NMPC removes the offset to below 0.05 mm. |
