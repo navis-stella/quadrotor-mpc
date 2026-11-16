@@ -170,8 +170,8 @@ $x_{\text{ref}}$ changes at runtime.
 
 ```bash
 git checkout stage2
-./run.sh stage2_terminal/simulate_qih.py  # → results/stage2a_qih/
-./run.sh stage2_terminal/simulate_dare.py  # → results/stage2b_dare/
+./run.sh simulate_qih.py          # → results/stage2a_qih/
+./run.sh simulate_dare.py         # → results/stage2b_dare/
 ```
 
 ## 4. Scenario
