@@ -15,7 +15,7 @@ Known input (NU = 4):               u_rotor = [ f1, f2, f3, f4 ]
                                     → acados PARAMETER (model.p), because
                                       model.u is taken by w
 Measurement (NY = 10):              y = [ p(3), q(4), ω(3) ]
-Model:                              quadrotor_3d_model.create_mhe_model()
+Model:                              quadrotor_model.create_mhe_model()
 
 Design order (Theorem 1/2 of Schiller & Müller, 2024) — one decay symbol, λ
     λ (per second) → κ = −ln λ → LMI → P, Q, R, T_min = ln4/κ   detectability_check.py
@@ -68,7 +68,7 @@ import numpy as np
 from casadi import SX, vertcat, mtimes, power, fabs, sumsqr
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from core.quadrotor_3d_model import (
+from core.quadrotor_model import (
     create_mhe_model,
     measurement_expr,
     quat_error_casadi,
@@ -208,7 +208,7 @@ def export_drone_mhe_solver(ts:        float,
     The weighting matrices are baked into the generated C code as
     constants. Promote them to acados parameters if online tuning is needed.
     """
-    # ── dynamic + observation model (from quadrotor_3d_model) ───────────
+    # ── dynamic + observation model (from quadrotor_model) ───────────
     #    z(19), u = w(19), p = rotor(4)
     model = create_mhe_model()
 

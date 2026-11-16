@@ -30,13 +30,13 @@ Why this matters:
 """
 
 import numpy as np
-from core.quadrotor_3d_model import m, g, f_hover, F_MAX, MIXER, NX, NU, quat_to_euler
+from core.quadrotor_model import m, g, f_hover, F_MAX, MIXER, NX, NU, quat_to_euler
 
 
 # ─────────────────────────────────────────────────────────────────
 # Motor Mixer Inverse  (wrench [T, τx, τy, τz] → motor forces)
 # ─────────────────────────────────────────────────────────────────
-_M_inv = np.linalg.inv(MIXER)          # MIXER from quadrotor_3d_model
+_M_inv = np.linalg.inv(MIXER)          # MIXER from quadrotor_model
 
 
 # ─────────────────────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Git tag | `stage1` (13-state model, thrusts as direct input; tag `rigid-body` = all stages before the motor dynamics) |
-| Files | `stage1_basic/ocp_config_basic.py`, `stage1_basic/simulate_basic.py` (+ shared `core/quadrotor_3d_model.py`, `core/plot_utils.py`) |
+| Files | `stage1_basic/ocp_config_basic.py`, `stage1_basic/simulate_basic.py` (+ shared `core/quadrotor_model.py`, `core/plot_utils.py`) |
 | Terminal treatment | terminal cost $W_e = Q$, no terminal constraint |
 | Results | `results/stage1_basic/` |
 
@@ -86,7 +86,7 @@ state bounds, so the OCP stays feasible even for large setpoint changes.
 
 | Item | Setting |
 |---|---|
-| Model | 17 states $[p, v, q, \omega, f]$ (body + rotor thrusts), 4 inputs $`f_{\text{cmd}} = [f_{\text{cmd},1} \dots f_{\text{cmd},4}]`$, $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ with $\tau_m = 30$ ms (`create_motor_model`), see [README](../README.md#quadrotor-model) |
+| Model | 17 states $[p, v, q, \omega, f]$ (body + rotor thrusts), 4 inputs $`f_{\text{cmd}} = [f_{\text{cmd},1} \dots f_{\text{cmd},4}]`$, $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ with $\tau_m = 30$ ms (`create_thrust_lag_model`), see [README](../README.md#quadrotor-model) |
 | Integrator | ERK4 (acados), 2 steps per interval because $\tau_m < T_s$ |
 | Cost | `NONLINEAR_LS`, $`y = [x;\, f;\, f_{\text{cmd}}]`$, $`W = \mathrm{blkdiag}(Q, Q_f, R_{\text{cmd}})`$, $`y_{\text{ref}} = [x_{\text{ref}};\, f_{\text{hover}};\, f_{\text{hover}}]`$ |
 | Terminal cost | $`W_e = \mathrm{blkdiag}(Q, Q_f)`$, $`y_e = [x;\, f]`$ |
@@ -105,7 +105,7 @@ command only gets a small weight, which keeps the Gauss-Newton Hessian positive 
 input. The thrust states need no bounds: the lag keeps $f$ between its start value and the
 command, so inside $`[f_{\min}, f_{\max}]`$.
 
-The plant (`create_motor_plant`) models the chain of a real drone with the rotor speeds
+The plant (`create_rotor_plant`) models the chain of a real drone with the rotor speeds
 $\Omega$ as states: the command becomes a speed command
 $`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, the ESC speed loop follows with
 $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$, and the thrust is $`f = k_f \Omega^2`$.

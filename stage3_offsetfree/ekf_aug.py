@@ -35,13 +35,13 @@ Tuning guide:
         Typical: R = diag([σ_pos², σ_vel², σ_quat², σ_omega²])
 
 Relation to Stage 4a (state_est_ekf.py):
-    Same augmented dynamics (quadrotor_3d_model.get_augmented_dynamics) and
+    Same augmented dynamics (quadrotor_model.get_augmented_dynamics) and
     the same predict/update algorithm, but y = x (13) instead of the partial
     y = [p; q; ω] (10). Kept separate so the Stage 3 results stay reproducible.
 """
 
 import numpy as np
-from core.quadrotor_3d_model import (
+from core.quadrotor_model import (
     NX, NU, ND, NZ,
     get_augmented_dynamics,
     quat_normalize,

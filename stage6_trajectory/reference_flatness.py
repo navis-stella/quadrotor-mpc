@@ -9,10 +9,10 @@ quadrotors," ICRA 2011, https://doi.org/10.1109/ICRA.2011.5980409
 Turns the planner output (a RefSample from reference_generate.py) into everything the
 tracking OCP needs at each stage:
 
-    x_r = [p_r, v_r, q_r, w_r]      13   same ordering as quadrotor_3d_model (q scalar-first, w body frame)
+    x_r = [p_r, v_r, q_r, w_r]      13   same ordering as quadrotor_model (q scalar-first, w body frame)
     u_r = [f1 f2 f3 f4]_r            4   per-rotor thrusts [N], "+" layout (MIXER)
 
-Everything is taken from quadrotor_3d_model (m, g, I, MIXER, F_MAX, OMEGA_MAX), so the
+Everything is taken from quadrotor_model (m, g, I, MIXER, F_MAX, OMEGA_MAX), so the
 map can never disagree with the prediction model.
 
 Model convention being inverted (z-up, world-frame force disturbance, body-frame torque
@@ -50,7 +50,7 @@ from typing import NamedTuple
 
 import numpy as np
 
-import core.quadrotor_3d_model as qm
+import core.quadrotor_model as qm
 
 _I = np.array([qm.Ixx, qm.Iyy, qm.Izz])
 

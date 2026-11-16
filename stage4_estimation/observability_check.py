@@ -18,7 +18,7 @@ y = [p; q; ω]. This is the local, single-point sanity check behind both:
 
 import numpy as np
 
-from core.quadrotor_3d_model import (
+from core.quadrotor_model import (
     get_augmented_dynamics,
     get_measurement_function,
     hover_point,

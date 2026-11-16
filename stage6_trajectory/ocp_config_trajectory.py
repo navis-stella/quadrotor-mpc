@@ -57,8 +57,8 @@ import casadi as ca
 from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from core.quadrotor_3d_model import (create_disturbance_model, quat_error_casadi,
-                                     F_MAX, NX, NU, ND)
+from core.quadrotor_model import (create_disturbance_model, quat_error_casadi,
+                                  F_MAX, NX, NU, ND)
 from core.terminal_cost import compute_dare_terminal_cost
 from stage3_offsetfree.ocp_config_offsetfree import add_soft_omega_box
 from core.codegen import build_path
@@ -114,7 +114,7 @@ def create_ocp(N:         int   = 20,
                       None = no rate limit
     """
     model = create_disturbance_model()
-    model.name = 'quadrotor_3d_trajectory'
+    model.name = 'quadrotor_trajectory'
     d   = model.p                                     # d̂ (6), as in Stage 3–4
     x_r = ca.SX.sym('x_r', NX)                        # reference state at the node
     u_r = ca.SX.sym('u_r', NU)                        # reference input at the node

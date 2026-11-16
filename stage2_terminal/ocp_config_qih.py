@@ -45,7 +45,7 @@ import casadi as ca
 from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from core.quadrotor_3d_model import create_nominal_model, f_hover, F_MAX, NX, NU
+from core.quadrotor_model import create_nominal_model, f_hover, F_MAX, NX, NU
 from stage2_terminal.compute_qih_params import compute_qih_offline_parameters
 from core.codegen import build_path
 

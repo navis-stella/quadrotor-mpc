@@ -40,7 +40,7 @@ import numpy as np
 import matplotlib
 import matplotlib.pyplot as plt
 
-from core.quadrotor_3d_model import quat_to_euler, f_hover, NU
+from core.quadrotor_model import quat_to_euler, f_hover, NU
 
 
 def _ensure_dir(save_path: str) -> None:

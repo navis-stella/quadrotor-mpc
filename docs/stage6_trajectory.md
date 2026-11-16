@@ -168,7 +168,7 @@ e(x, x_r) = \begin{bmatrix} p - p_r \\ v - v_r \\ \mathrm{vec}(q \otimes q_r^{-1
 ```
 
 The attitude part is the vector part of the error quaternion, computed with `quat_error_casadi`
-from `quadrotor_3d_model.py` (the same function the MHE cost uses). For a rotation by $\theta$
+from `quadrotor_model.py` (the same function the MHE cost uses). For a rotation by $\theta$
 about the axis $n$ it equals $`\sin(\theta/2)\, n`$, i.e. half the small-angle rotation vector.
 Compared with the component difference $q - q_r$ of Stages 1–5:
 

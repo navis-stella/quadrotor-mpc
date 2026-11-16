@@ -1,6 +1,6 @@
 """
-quadrotor_3d_model.py — All Stages Full 3D Quadrotor Model (Quaternion)
-=======================================================================
+quadrotor_model.py — All Stages Full 3D Quadrotor Model (Quaternion)
+====================================================================
 Single source of the physics for every stage. Contains:
   - Physical parameters, dimensions, motor mixer, operating envelope
   - Quaternion utilities                (numpy + CasADi)
@@ -321,7 +321,7 @@ def create_nominal_model() -> AcadosModel:
     s = _build_core_symbols()
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d'
+    model.name        = 'quadrotor'
     model.x           = s['x']
     model.u           = s['u']
     model.xdot        = ca.SX.sym('xdot', NX)
@@ -350,7 +350,7 @@ def create_disturbance_model() -> AcadosModel:
     d = ca.SX.sym('d', ND)
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d_disturb'
+    model.name        = 'quadrotor_disturb'
     model.x           = s['x']
     model.u           = s['u']
     model.p           = d
@@ -408,7 +408,7 @@ def create_mhe_model() -> AcadosModel:
     w = ca.SX.sym('w', NW)
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d_mhe'
+    model.name        = 'quadrotor_mhe'
     model.x           = z
     model.u           = w              # MHE 'input' = process noise
     model.p           = u              # rotor thrusts as known parameter
@@ -585,7 +585,7 @@ def create_tracking_model() -> AcadosModel:
     p_a = ca.SX.sym('p_a', NA)
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d_tracking'
+    model.name        = 'quadrotor_tracking'
     model.x           = ca.vertcat(s['x'], p_a)
     model.u           = s['u']
     model.xdot        = ca.SX.sym('xdot', NXA)
@@ -602,12 +602,12 @@ def create_tracking_model() -> AcadosModel:
 # f_cmd, the ESC tracks the matching rotor speed, and the thrust follows
 # with the speed-loop lag. Two views of that lag:
 #
-#   Plant  (create_motor_plant)   rotor speeds Ω as states — the physics:
+#   Plant  (create_rotor_plant)   rotor speeds Ω as states — the physics:
 #       ω_cmd = √(clip(f_cmd, F_MIN, F_MAX) / k_f)      inverse thrust map
 #       Ω̇     = (ω_cmd − Ω) / τ_m                       closed speed loop
 #       f     = k_f Ω²                                  thrust on the body
 #
-#   MPC model  (create_motor_model)   thrusts f as states — what the MPC sees:
+#   MPC model  (create_thrust_lag_model)   thrusts f as states — what the MPC sees:
 #       ḟ = (f_cmd − f) / τ_m
 #
 # Both agree to first order: ḟ = 2 k_f Ω Ω̇ = (f_cmd − f) · 2Ω / (ω_cmd + Ω),
@@ -618,7 +618,7 @@ def create_tracking_model() -> AcadosModel:
 # 30 ms for small steps).
 #
 # Full state feedback measures Ω (ESC rpm telemetry) and hands the MPC
-# f = k_f Ω²  (motor_plant_to_model_state).
+# f = k_f Ω²  (rotor_to_thrust_state).
 
 def thrust_from_rotor(Omega):
     """f = k_f Ω²  (NumPy or CasADi)."""
@@ -630,21 +630,21 @@ def rotor_from_thrust(f):
     return np.sqrt(np.maximum(f, 0.0) / K_F)
 
 
-def motor_plant_to_model_state(x_plant: np.ndarray) -> np.ndarray:
+def rotor_to_thrust_state(x_plant: np.ndarray) -> np.ndarray:
     """[x (13); Ω (4)]  →  [x (13); f (4)]  — rotor speeds to thrusts."""
     x_model = np.array(x_plant, dtype=float, copy=True)
     x_model[NX:NXM] = thrust_from_rotor(x_plant[NX:NXM])
     return x_model
 
 
-def motor_model_to_plant_state(x_model: np.ndarray) -> np.ndarray:
+def thrust_to_rotor_state(x_model: np.ndarray) -> np.ndarray:
     """[x (13); f (4)]  →  [x (13); Ω (4)]  — e.g. to start the plant at a model state."""
     x_plant = np.array(x_model, dtype=float, copy=True)
     x_plant[NX:NXM] = rotor_from_thrust(x_model[NX:NXM])
     return x_plant
 
 
-def _build_motor_symbols():
+def _build_thrust_lag_symbols():
     """
     Core symbols of the motor-dynamics MPC model: state [x (13); f (4)],
     input u = f_cmd (4). The wrench comes from the thrust STATES f, so
@@ -656,13 +656,13 @@ def _build_motor_symbols():
     return {'x': x, 'u': u, 'T_total': wrench[0], 'tau': wrench[1:4]}
 
 
-def _build_motor_f_expl(s, d=None):
+def _build_thrust_lag_f_expl(s, d=None):
     """[ẋ; ḟ] = [f(x, f, d); (f_cmd − f) / τ_m]."""
     f_state = s['x'][NX:NXM]
     return ca.vertcat(_build_f_expl(s, d), (s['u'] - f_state) / TAU_MOTOR)
 
 
-def create_motor_model() -> AcadosModel:
+def create_thrust_lag_model() -> AcadosModel:
     """
     Motor-dynamics MPC model, nominal (d = 0), no parameters:
 
@@ -671,39 +671,39 @@ def create_motor_model() -> AcadosModel:
     Counterpart of create_nominal_model(). Input bounds for the OCP:
     F_MIN ≤ f_cmd ≤ F_MAX (idle speed > 0, full throttle).
     """
-    s = _build_motor_symbols()
+    s = _build_thrust_lag_symbols()
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d_motor'
+    model.name        = 'quadrotor_thrust_lag'
     model.x           = s['x']
     model.u           = s['u']
     model.xdot        = ca.SX.sym('xdot', NXM)
-    model.f_expl_expr = _build_motor_f_expl(s)
+    model.f_expl_expr = _build_thrust_lag_f_expl(s)
 
     return model
 
 
-def create_motor_disturbance_model() -> AcadosModel:
+def create_thrust_lag_disturbance_model() -> AcadosModel:
     """
     Motor-dynamics MPC model with the disturbance d (6) as runtime parameter
     p — counterpart of create_disturbance_model(). The disturbance acts on
     the body (forces, torques), not on the motors.
     """
-    s = _build_motor_symbols()
+    s = _build_thrust_lag_symbols()
     d = ca.SX.sym('d', ND)
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d_motor_disturb'
+    model.name        = 'quadrotor_thrust_lag_disturb'
     model.x           = s['x']
     model.u           = s['u']
     model.p           = d
     model.xdot        = ca.SX.sym('xdot', NXM)
-    model.f_expl_expr = _build_motor_f_expl(s, d)
+    model.f_expl_expr = _build_thrust_lag_f_expl(s, d)
 
     return model
 
 
-def motor_hover_point():
+def thrust_lag_hover_point():
     """(x_hover (17), u_hover (4)) of the MPC model: level hover, f = f_cmd = f_hover."""
     x_hover = np.zeros(NXM)
     x_hover[6]      = 1.0
@@ -711,7 +711,7 @@ def motor_hover_point():
     return x_hover, np.full(NU, f_hover)
 
 
-def get_motor_hover_linearization():
+def get_thrust_lag_hover_linearization():
     """
     Continuous-time linearization of the motor MPC model (d = 0) at hover.
 
@@ -724,16 +724,16 @@ def get_motor_hover_linearization():
     Returns:
         A_c (17×17), B_c (17×4)
     """
-    s = _build_motor_symbols()
-    f = _build_motor_f_expl(s)
+    s = _build_thrust_lag_symbols()
+    f = _build_thrust_lag_f_expl(s)
     jac = ca.Function('jac_motor_hover', [s['x'], s['u']],
                       [ca.jacobian(f, s['x']), ca.jacobian(f, s['u'])])
-    x_hover, u_hover = motor_hover_point()
+    x_hover, u_hover = thrust_lag_hover_point()
     A_c, B_c = jac(x_hover, u_hover)
     return A_c.full(), B_c.full()
 
 
-def _build_motor_plant_model() -> AcadosModel:
+def _build_rotor_plant_model() -> AcadosModel:
     """Plant ODE on [x (13); Ω (4)] with f_cmd as input and p = d (see section header)."""
     x     = ca.SX.sym('x', NXM)
     u     = ca.SX.sym('f_cmd', NU)
@@ -746,7 +746,7 @@ def _build_motor_plant_model() -> AcadosModel:
     s = {'x': x, 'u': u, 'T_total': wrench[0], 'tau': wrench[1:4]}
 
     model             = AcadosModel()
-    model.name        = 'quadrotor_3d_motor_plant'
+    model.name        = 'quadrotor_rotor_plant'
     model.x           = x
     model.u           = u
     model.p           = d
@@ -756,7 +756,7 @@ def _build_motor_plant_model() -> AcadosModel:
     return model
 
 
-def create_motor_plant(Ts: float) -> AcadosSimSolver:
+def create_rotor_plant(Ts: float) -> AcadosSimSolver:
     """
     AcadosSimSolver plant with motor dynamics: one call advances by Ts.
 
@@ -771,7 +771,7 @@ def create_motor_plant(Ts: float) -> AcadosSimSolver:
     resolve τ_m = 30 ms at Ts = 50 ms.
     """
     sim = AcadosSim()
-    sim.model = _build_motor_plant_model()
+    sim.model = _build_rotor_plant_model()
     sim.solver_options.T = Ts
     sim.solver_options.integrator_type = 'ERK'
     sim.solver_options.num_stages = 4
@@ -781,7 +781,7 @@ def create_motor_plant(Ts: float) -> AcadosSimSolver:
     return AcadosSimSolver(sim, json_file=build_path(f'{sim.model.name}_sim.json'))
 
 
-def motor_plant_hover_state() -> np.ndarray:
+def rotor_plant_hover_state() -> np.ndarray:
     """Plant state [x (13); Ω (4)] at level hover: Ω = OMEGA_ROTOR_HOVER."""
     x = np.zeros(NXM)
     x[6]      = 1.0

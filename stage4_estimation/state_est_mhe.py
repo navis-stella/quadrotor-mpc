@@ -7,7 +7,7 @@ augmented state — the MHE counterpart of state_est_ekf.py.
     State:        z = [x(13); d(6)]  ∈ R^19  (augmented)
     Measurement:  y = [p; q; ω]      ∈ R^10  (position, quaternion, angular velocity)
 
-Model sources (quadrotor_3d_model) — shared with the Stage 4a EKF:
+Model sources (quadrotor_model) — shared with the Stage 4a EKF:
     - Augmented dynamics  (create_mhe_model = f_aug + process noise w)
     - Measurement model   (measurement_expr)
 
@@ -39,7 +39,7 @@ from collections import deque
 
 import numpy as np
 
-from core.quadrotor_3d_model          import quat_normalize, f_hover, NU, NY, NZ, NW
+from core.quadrotor_model             import quat_normalize, f_hover, NU, NY, NZ, NW
 from stage4_estimation.ocp_config_mhe import (
     export_drone_mhe_solver, load_mhe_params, pack_mhe_param,
     MHE_PARAMS_PATH, HORIZON_FACTOR,

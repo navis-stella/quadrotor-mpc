@@ -306,7 +306,7 @@ def create_solver(pillars,
     # one name per γ: each solver is its own shared library, so several γ
     # can be built and run in one process (the sweep of simulate_obst_dcbf)
     name = 'obst_dist' if gamma is None else f'obst_dcbf_g{gamma:g}'.replace('.', 'p')
-    ocp.model.name = f'quadrotor_3d_{name}'
+    ocp.model.name = f'quadrotor_{name}'
     if z_l1 is None:
         z_l1 = Z_L1 if gamma is None else Z_L1_DCBF
     add_pillar_constraints(ocp, pillars, r_drone, margin, z_l1, z_l2, gamma)

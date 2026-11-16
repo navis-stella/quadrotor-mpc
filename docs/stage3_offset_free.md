@@ -3,7 +3,7 @@
 | | |
 |---|---|
 | Git tag | `stage3` |
-| Files | `ocp_config_offsetfree.py`, `ekf_aug.py`, `ss_target.py`, `simulate_offsetfree.py` (+ shared `quadrotor_3d_model.py`, `plot_utils.py`) |
+| Files | `ocp_config_offsetfree.py`, `ekf_aug.py`, `ss_target.py`, `simulate_offsetfree.py` (+ shared `quadrotor_model.py`, `plot_utils.py`) |
 | Method | disturbance-augmented prediction model + augmented EKF + analytical steady-state target calculator |
 | Terminal cost | $W_e = P_{\text{lqr}}$ (DARE, unchanged from [Stage 2b](stage2_terminal_cost.md)) |
 | Results | `results/stage3_offsetfree/` |

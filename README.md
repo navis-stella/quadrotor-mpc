@@ -15,16 +15,18 @@ results with plots. This README gives the overview.
 
 | Property | Value |
 |----------|-------|
-| States (13) | position, velocity (world frame), unit quaternion (scalar-first), body rates |
-| Inputs (4) | individual motor thrusts, $0 \le f_i \le 3 f_{\text{hover}} \approx 7.35$ N |
-| Motor dynamics (migrated: Stage 1) | the controller sends thrust **commands**; the plant has rotor speeds $\Omega$ as states (inverse thrust map, ESC speed loop $\tau_m = 30$ ms, $f = k_f \Omega^2$, idle speed), the MPC predicts $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ on 17 states. Stages not yet migrated still use the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
+| Rigid body (13) | position, velocity (world frame), unit quaternion (scalar-first), body rates |
+| Input (4) | thrust **commands** to the four ESCs, $`f_{\min} \le f_{\text{cmd},i} \le f_{\max} = 3 f_{\text{hover}} \approx 7.36`$ N, idle thrust $f_{\min} \approx 0.074$ N |
+| Plant (17) | rigid body + rotor speeds $\Omega$: inverse thrust map $`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, ESC speed loop $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$ with $\tau_m = 30$ ms, thrust $`f = k_f \Omega^2`$ |
+| MPC prediction model (17) | rigid body + rotor thrusts $f$ with the lag $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ (equal to the plant to first order); rotor speeds measured, passed as $`f = k_f \Omega^2`$ |
+| Migration to the motor dynamics | done: Stage 1. Stages 2–9 still use the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
 | Layout | `+` configuration, hover thrust $f_{\text{hover}} = mg/4 \approx 2.45$ N |
 | Disturbance (Stages 3–4) | constant force (world frame) and torque (body frame), $d \in \mathbb{R}^6$ |
 | Reference trajectory (Stage 6) | analytic helix, mapped by differential flatness to a full state and input reference $(x_r(t), u_r(t))$ |
 | Tracking model (Stage 5) | state augmented by an artificial reference position, $`\tilde x = [x;\, p_a] \in \mathbb{R}^{16}`$, $\dot p_a = 0$ |
 | Integration | ERK4 (acados) |
 
-Equations of motion, disturbance model and quaternion conventions →
+Equations of motion, motor dynamics, disturbance model and quaternion conventions →
 [docs/quadrotor_model.md](docs/quadrotor_model.md)
 
 ## Stages
@@ -66,11 +68,13 @@ Equations of motion, disturbance model and quaternion conventions →
 ```
 quadrotor_3d_nmpc/
 ├── core/                         # Shared by all stages
-│   ├── quadrotor_3d_model.py     #   CasADi dynamics (nominal, disturbance-parameterized,
+│   ├── quadrotor_model.py        #   CasADi dynamics (nominal, disturbance-parameterized,
 │   │                             #   augmented [x;d], MHE model), hover linearization,
 │   │                             #   AcadosSimSolver plant, quaternion utilities,
 │   │                             #   measurement model h(z), tracking model
-│   │                             #   [x; p_a] and steady-state map g(p_a)
+│   │                             #   [x; p_a] and steady-state map g(p_a); motor
+│   │                             #   dynamics: thrust-lag MPC model [x; f], rotor plant [x; Ω]
+│   ├── motor_check.py            #   checks of the motor models (equilibrium, linearization, steps)
 │   ├── plot_utils.py             #   all figures
 │   ├── sensor_simulator.py       #   y = [p; q; ω] + Gaussian noise (Stages 4, 6)
 │   ├── ss_target.py              #   analytical steady-state target (Stages 3–4)

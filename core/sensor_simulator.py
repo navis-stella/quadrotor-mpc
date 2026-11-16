@@ -36,7 +36,7 @@ Not modeled:
 
 import numpy as np
 
-from core.quadrotor_3d_model import NX, NY, IDX_Y
+from core.quadrotor_model import NX, NY, IDX_Y
 
 # Mocap-equivalent noise — the single definition used by the closed loop
 # (sensor) and by the EKF (matched R).
@@ -109,7 +109,7 @@ class SensorSimulator:
 # Sanity checks
 # ─────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    from core.quadrotor_3d_model import get_measurement_function, ND, NZ
+    from core.quadrotor_model import get_measurement_function, ND, NZ
 
     # ── 1. Noise-free measurement selects the right components ──
     sensor = SensorSimulator()

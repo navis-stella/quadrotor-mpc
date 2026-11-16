@@ -103,7 +103,7 @@ state $g(y_r^\ast)$ — the optimal reachable one — and not merely to *some* s
 | Offset cost | $V_o = \lVert p_a - r \rVert^2_T$, $T = \mathrm{diag}(50, 50, 50)$ |
 
 - $g$ is affine in $p_a$, hence Lipschitz with constant 1. It is implemented **once**
-  (`steady_state_map` in `quadrotor_3d_model.py`) and accepts NumPy or CasADi input, so the OCP and
+  (`steady_state_map` in `quadrotor_model.py`) and accepts NumPy or CasADi input, so the OCP and
   the simulation cannot disagree on it.
 - Every hover point is a steady state, and $f_{\text{hover}} = F_{\max}/3$ lies strictly inside
   $[0, F_{\max}]$. Shrinking the room by `MARGIN = 0.5` m makes every steady state in $\mathcal{Y}_s$
@@ -249,7 +249,7 @@ cost ($T = 50$) and no attitude or rate limits produces.
 |---|---|
 | `ocp_config_tracking.py` | tracking OCP, runtime helpers, $\mathcal{Y}_s$, `optimal_reachable_reference` |
 | `simulate_tracking.py` | closed loop, reference schedule, summary, figures |
-| `quadrotor_3d_model.py` | `create_tracking_model()` ($\tilde x = [x; p_a]$), `steady_state_map()` $= g$, `IDX_TERM_EQ` |
+| `quadrotor_model.py` | `create_tracking_model()` ($\tilde x = [x; p_a]$), `steady_state_map()` $= g$, `IDX_TERM_EQ` |
 | `plot_utils.py` | `plot_artificial_reference()` (new), the other plots are shared with Stages 1–4 |
 
 ```bash

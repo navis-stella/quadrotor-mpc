@@ -14,7 +14,7 @@ Expected (Limon et al., IEEE TAC 2018):
                                 (convergence to the optimal reachable steady state)
 
 Imports:
-    quadrotor_3d_model.py   → create_disturbance_plant() (p = 0 → nominal plant),
+    quadrotor_model.py      → create_disturbance_plant() (p = 0 → nominal plant),
                                quat_normalize(), steady_state_map(), NX, NU
     ocp_config_tracking.py  → create_solver() + runtime helpers, Y_s, y_r*
     plot_utils.py           → plot_artificial_reference(), plot_states(),
@@ -29,8 +29,8 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_3d_model import (create_disturbance_plant, quat_normalize,
-                                     steady_state_map, F_MAX, NX, NU)
+from core.quadrotor_model import (create_disturbance_plant, quat_normalize,
+                                  steady_state_map, F_MAX, NX, NU)
 import stage5_tracking.ocp_config_tracking as track
 from core.plot_utils import (plot_artificial_reference, plot_states, plot_inputs,
                              plot_3d_trajectory)
