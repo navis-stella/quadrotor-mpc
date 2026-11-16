@@ -18,6 +18,8 @@ titles and paths.
     plot_tube_certificate                            e/h_S, w/w̄   (Stage 8)
     plot_smpc_chance, plot_smpc_prediction           realizations vs chance
                                                      constraints, κσ_k  (Stage 9)
+    plot_motor_steps                                 thrust step responses, plant
+                                                     vs MPC lag model   (motor dynamics)
 
 All functions require explicit title and save_path — no stage-specific
 defaults here, so each simulation script controls its own labeling.
@@ -1123,6 +1125,61 @@ def plot_smpc_prediction(y:         np.ndarray,
     ax.set_ylabel('back-off g − θ_k = κσ_k [m]')
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=8, loc='upper left')
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+def plot_motor_steps(t:         np.ndarray,
+                     cases:     list,
+                     tau:       float,
+                     f_min:     float,
+                     f_max:     float,
+                     title:     str,
+                     save_path: str):
+    """
+    Motor dynamics: thrust step responses of the plant vs the MPC lag model (1 × 2).
+
+    t      (n,)   time after the step [s]
+    cases  list of dicts {label, f_cmd, f_plant (n,), f_model (n,)}
+    tau    speed-loop time constant τ_m [s] (marked on both panels)
+
+    Left: thrust f(t) — plant k_f Ω² (solid) and MPC model ḟ = (f_cmd − f)/τ_m
+    (dashed), with the envelope [f_min, f_max]. Right: normalized response
+    (f − f₀)/(f_∞ − f₀), where 1 − e⁻¹ ≈ 0.632 at t = τ for the linear lag.
+    """
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
+    fig.suptitle(title, fontsize=14)
+    colors = plt.cm.tab10(np.arange(len(cases)))
+
+    ax = axes[0]
+    for c, col in zip(cases, colors):
+        ax.plot(t * 1e3, c['f_plant'], color=col, lw=1.6, label=f"{c['label']}: plant k_f Ω²")
+        ax.plot(t * 1e3, c['f_model'], color=col, lw=1.2, ls='--', label='MPC model')
+    for lim, name in ((f_min, 'F_MIN (idle)'), (f_max, 'F_MAX')):
+        ax.axhline(lim, color='r', lw=0.9, ls=':')
+        ax.text(t[-1] * 1e3, lim, f' {name}', va='bottom', ha='right', fontsize=8, color='r')
+    ax.axvline(tau * 1e3, color='0.5', lw=0.8, ls=':')
+    ax.set_xlabel('t [ms]')
+    ax.set_ylabel('thrust per motor f [N]')
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=7, loc='center right')
+
+    ax = axes[1]
+    for c, col in zip(cases, colors):
+        for key, ls in (('f_plant', '-'), ('f_model', '--')):
+            f = c[key]
+            ax.plot(t * 1e3, (f - f[0]) / (f[-1] - f[0]), color=col, ls=ls,
+                    lw=1.6 if ls == '-' else 1.2)
+    ax.axhline(1.0 - np.exp(-1.0), color='0.5', lw=0.8, ls=':')
+    ax.axvline(tau * 1e3, color='0.5', lw=0.8, ls=':')
+    ax.text(tau * 1e3, 0.05, ' t = τ_m', fontsize=8, color='0.4')
+    ax.set_xlabel('t [ms]')
+    ax.set_ylabel('(f − f₀) / (f_∞ − f₀)')
+    ax.grid(True, alpha=0.3)
 
     plt.tight_layout()
     _ensure_dir(save_path)
