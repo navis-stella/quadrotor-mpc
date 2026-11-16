@@ -1,7 +1,7 @@
 """
 simulate_obst_dcbf.py — Stage 7b Obstacle Avoidance with a Discrete-Time CBF
 ============================================================================
-Same scene and closed loop as Stage 7a (obstacle_sim_config: helix through
+Same scene and closed loop as Stage 7a (closed_loop: helix through
 three pillars, nominal plant, full state feedback); only the obstacle
 constraint changes from the distance form to the discrete-time control
 barrier function (DCBF) of Zeng, Zhang & Sreenath (ACC 2021):
@@ -37,11 +37,11 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import argparse
 import numpy as np
 
-import stage7_obstacle.ocp_config_obstacle    as obs
-import stage7_obstacle.obstacle_sim_config    as osc
-from stage7_obstacle.obstacle_sim_config      import PILLARS, TS, MARGIN
-from stage4_estimation.closed_loop_sim_config import OMEGA_MPC
-from core.plot_utils                          import plot_dcbf_sweep
+import stage7_obstacle.ocp_config_obstacle as obs
+import stage7_obstacle.closed_loop         as cl
+from stage7_obstacle.closed_loop           import PILLARS, TS, MARGIN
+from stage4_estimation.closed_loop         import OMEGA_MPC
+from core.plot_utils                       import plot_dcbf_sweep
 
 RESULTS_DIR = os.path.join('results', 'stage7b_obst_dcbf')
 
@@ -58,7 +58,7 @@ def swerve_lead(res: dict, dev: float = 0.01) -> float:
     leaves the reference by more than `dev` [s]. Before that crossing it
     tracks to < 1 mm (Stage 6), so this measures when the avoidance starts.
     """
-    k_c  = osc.encounters(res['X_r'])[0][0]
+    k_c  = cl.encounters(res['X_r'])[0][0]
     e_p  = np.linalg.norm(res['X'][:k_c, :3] - res['X_r'][:k_c, :3], axis=1)
     k_on = int(np.argmax(e_p > dev))
     return (k_c - k_on) * TS if e_p[k_on] > dev else 0.0
@@ -102,7 +102,7 @@ if __name__ == '__main__':
     args = ap.parse_args()
 
     if args.sweep:
-        runs = [osc.simulate(gamma=g, verbose=False) for g in SWEEP]
+        runs = [cl.simulate(gamma=g, verbose=False) for g in SWEEP]
         print_sweep([sweep_row(r) for r in runs])
         curves = []
         for r in runs:
@@ -115,8 +115,8 @@ if __name__ == '__main__':
                         'Stage 7b — DCBF: effect of γ (first turn, P1 → P2 → P3)',
                         os.path.join(RESULTS_DIR, 'gamma_sweep.png'))
     else:
-        res = osc.simulate(gamma=GAMMA)
-        osc.summarize(res, f'Stage 7b — Obstacle avoidance, DCBF γ = {GAMMA:g} '
+        res = cl.simulate(gamma=GAMMA)
+        cl.summarize(res, f'Stage 7b — Obstacle avoidance, DCBF γ = {GAMMA:g} '
                            '(nominal, full state)')
         print_sweep([sweep_row(res)])
-        osc.make_figures(res, RESULTS_DIR, f'Stage 7b — DCBF (γ = {GAMMA:g})')
+        cl.make_figures(res, RESULTS_DIR, f'Stage 7b — DCBF (γ = {GAMMA:g})')

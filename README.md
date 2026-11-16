@@ -19,7 +19,7 @@ results with plots. This README gives the overview.
 | Input (4) | thrust **commands** to the four ESCs, $`f_{\min} \le f_{\text{cmd},i} \le f_{\max} = 3 f_{\text{hover}} \approx 7.36`$ N, idle thrust $f_{\min} \approx 0.074$ N |
 | Plant (17) | rigid body + rotor speeds $\Omega$: inverse thrust map $`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, ESC speed loop $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$ with $\tau_m = 30$ ms, thrust $`f = k_f \Omega^2`$ |
 | MPC prediction model (17) | rigid body + rotor thrusts $f$ with the lag $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ (equal to the plant to first order); rotor speeds measured, passed as $`f = k_f \Omega^2`$ |
-| Migration to the motor dynamics | done: Stages 1–3. Stages 4–9 still use the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
+| Migration to the motor dynamics | done: Stages 1–4. Stages 5–9 still use the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
 | Layout | `+` configuration, hover thrust $f_{\text{hover}} = mg/4 \approx 2.45$ N |
 | Disturbance (Stages 3–4) | constant force (world frame) and torque (body frame), $d \in \mathbb{R}^6$ |
 | Reference trajectory (Stage 6) | analytic helix, mapped by differential flatness to a full state and input reference $(x_r(t), u_r(t))$ |
@@ -37,7 +37,7 @@ Equations of motion, motor dynamics, disturbance model and quaternion convention
 | `stage2` | 2a | **Quasi-infinite horizon** — terminal cost $P_{\text{lyap}}$ + soft terminal set $\Omega_\alpha$ | [stage2_terminal_cost.md](docs/stage2_terminal_cost.md) |
 | `stage2` | 2b | **DARE terminal cost** — $P_{\text{lqr}}$ from the reduced-order DARE, no terminal set | [stage2_terminal_cost.md](docs/stage2_terminal_cost.md) |
 | `stage3` | 3 | **Offset-free NMPC** — disturbance model + EKF + analytical steady-state target calculator | [stage3_offset_free.md](docs/stage3_offset_free.md) |
-| `stage4` | 4a | **Partial measurement, augmented EKF** — only $`y = [p;\, q;\, \omega]`$ measured, with noise | [stage4a_ekf.md](docs/stage4a_ekf.md) |
+| `stage4` | 4a | **Partial measurement, augmented EKF** — velocity and rotor thrust unmeasured, $`y = [p;\, q;\, \omega]`$ with noise | [stage4a_ekf.md](docs/stage4a_ekf.md) |
 | `stage4` | 4b | **Lyapunov MHE** — weights and horizon from an LMI detectability certificate; comparison with the EKF | [stage4b_mhe.md](docs/stage4b_mhe.md) |
 | `stage5` | 5 | **Tracking NMPC with artificial reference** — piece-wise constant references, recursively feasible for any reference, converges to the closest admissible steady state (nominal plant, full state feedback) | [stage5_tracking.md](docs/stage5_tracking.md) |
 | `stage6` | 6 | **Trajectory-tracking NMPC** — helix reference, flatness feedforward $(x_r, u_r)$, time-indexed reference over the horizon, quaternion-error cost; noisy $`y = [p;\, q;\, \omega]`$ with the Stage 4b MHE | [stage6_trajectory.md](docs/stage6_trajectory.md) |
@@ -54,8 +54,8 @@ Equations of motion, motor dynamics, disturbance model and quaternion convention
 | 2a | Certified by the decrease condition itself (sampling + local maximization) with a tuned auxiliary gain, the terminal set is still small: about ±7 mm in position, ±1° tilt. The trajectory enters it after 1.05 s, so the guarantee covers only the final approach. |
 | 2b | Same nominal trajectory as Stage 1, now with the LQR cost-to-go as terminal cost (DARE weights scaled by $T_s$ to match acados' cost scaling); used as the terminal cost from Stage 3 on. |
 | 3 | Under wind and a 30% mass error, standard NMPC settles 71 / −43 / −98 mm off target; offset-free NMPC removes the offset to below 0.005 mm. The EKF estimates d on the 23-state model [x; f; d] with the exact discrete Jacobian (the thrust lag is faster than Ts). |
-| 4a | With only $`[p;\, q;\, \omega]`$ measured, the EKF keeps tracking unbiased; velocity estimation error 53 mm/s, force-disturbance error 0.14 N, 0.7 ms per step. |
-| 4b | The certified MHE ($T = 3$ s $> T_{\min} = 2$ s) estimates velocity $5\times$ and the disturbance $18\times$ more accurately than the EKF, at 14 ms per step (budget 50 ms). |
+| 4a | With only $`[p;\, q;\, \omega]`$ measured, the 23-state EKF estimates velocity, rotor thrusts (0.02 N error) and disturbance and keeps tracking unbiased; velocity estimation error 50 mm/s, force-disturbance error 0.15 N, 0.3 ms per step. It uses the exact discrete Jacobian; the observability check needs a time-scaled matrix (thrust lag). |
+| 4b | The certified MHE on the 23-state model ($T = 3$ s $> T_{\min} = 2$ s) estimates velocity $5\times$, the disturbance $18\times$ and the unmeasured rotor thrusts $15\text{–}40\times$ more accurately than the EKF, at 18 ms per step (budget 50 ms). The certificate needed a lifted vertex argument (thrust states make $A$ quadratic in $q$), the online MHE a Gauss-Newton Hessian. |
 | 5 | A reference sequence with 6 m jumps, the last one outside the room ($x = 12$ m), is flown on the nominal plant. The artificial reference $p_a^\ast$ runs ahead of the quadrotor and stops at the boundary of the steady-state set; the position settles at the closest admissible point $y_r^\ast = (8, 6, 2)$ m. The flight is aggressive (tilt up to ≈ 65°, body rates up to ≈ 6.6 rad/s, motors saturated at the jumps). |
 | 6 | A 22.9 s climbing helix (2 m/s, tilt up to 17.5°) is flown with only noisy $`[p;\, q;\, \omega]`$ measured and the certified MHE in the loop: 10 mm RMS position error and 0.65° attitude error, 0 failed solves, MPC ≈ 3 ms per call. With full state feedback the same controller tracks to below 0.2 mm. |
 | 7a | Three pillars stand on the helix, crossed 9 times in 3 turns. The quadrotor leaves the reference about one horizon (1 s) before each pillar, passes it on the near side 0.35 m off the reference and keeps exactly the 5 cm margin (47.6 mm between samples); 0 failed solves, slack at solver tolerance, MPC ≈ 5 ms per call. |
@@ -73,7 +73,8 @@ quadrotor_3d_nmpc/
 │   │                             #   AcadosSimSolver plant, quaternion utilities,
 │   │                             #   measurement model h(z), tracking model
 │   │                             #   [x; p_a] and steady-state map g(p_a); motor
-│   │                             #   dynamics: thrust-lag MPC model [x; f], rotor plant [x; Ω]
+│   │                             #   dynamics: thrust-lag MPC model [x; f], rotor plant [x; Ω],
+│   │                             #   augmented [x; f; d] for the Stage 3–4 estimators
 │   ├── motor_check.py            #   checks of the motor models (equilibrium, linearization, steps)
 │   ├── plot_utils.py             #   all figures
 │   ├── sensor_simulator.py       #   y = [p; q; ω] + Gaussian noise (Stages 4, 6)
@@ -102,7 +103,7 @@ quadrotor_3d_nmpc/
 │   ├── detectability_check.py    #   4b: LMI detectability certificate → data/mhe_params.npz
 │   ├── ocp_config_mhe.py         #   4b: acados MHE OCP + certificate I/O
 │   ├── state_est_mhe.py          #   4b: MHE runtime wrapper (buffers, prior, warm start)
-│   ├── closed_loop_sim_config.py #   the one closed loop both estimators run in
+│   ├── closed_loop.py            #   the one closed loop both estimators run in
 │   ├── simulate_ekf.py           #   4a: entry point
 │   ├── simulate_mhe.py           #   4b: entry point
 │   └── simulate_compare.py       #   EKF vs MHE from the saved runs
@@ -117,7 +118,7 @@ quadrotor_3d_nmpc/
 ├── stage7_obstacle/              # Stage 7   — pillars on the helix
 │   ├── ocp_config_obstacle.py    #             Stage 6 OCP + soft pillar constraints: distance form
 │   │                             #             h_j(p) ≥ 0 (7a) or DCBF (7b), projected warm start
-│   ├── obstacle_sim_config.py    #             shared scene + closed loop
+│   ├── closed_loop.py            #             shared scene + closed loop
 │   ├── simulate_obst_dist.py     #   7a: entry point, distance constraint
 │   └── simulate_obst_dcbf.py     #   7b: entry point, DCBF (--sweep over γ)
 ├── stage8_tube/                  # Stage 8   — robust tube MPC
@@ -132,7 +133,8 @@ quadrotor_3d_nmpc/
 │   └── simulate_smpc.py          #             entry point: 300 closed loops on the nonlinear plant
 │
 ├── data/                         # Offline results read at run time
-│   ├── mhe_params.npz            #   Stage 4b certificate (P, Q, R, λ, T_min, envelope)
+│   ├── mhe_params.npz            #   Stage 4b certificate (P, Q, R, λ, T_min, envelope), motor model
+│   ├── mhe_params_rigid.npz      #   13-state certificate, used by Stage 6 until it migrates
 │   ├── tube_params.npz           #   Stage 8 tube parameters
 │   └── smpc_params.npz           #   Stage 9 SMPC parameters
 ├── run.sh                        # WSL bridge launcher (Windows Git Bash → WSL2)

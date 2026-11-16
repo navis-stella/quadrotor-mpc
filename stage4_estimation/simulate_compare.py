@@ -2,7 +2,7 @@
 simulate_compare.py — Stage 4 EKF vs MHE Comparison
 ===================================================
 Loads the saved runs of simulate_ekf.py and simulate_mhe.py — the same
-closed loop (closed_loop_sim_config.py) with only the estimator swapped —
+closed loop (closed_loop.py) with only the estimator swapped —
 and puts them side by side. No simulation happens here, so the comparison can be
 redrawn without re-running the solvers.
 
@@ -18,12 +18,12 @@ Output: results/stage4_compare/ekf_vs_mhe.png
 
 import numpy as np
 
-from stage4_estimation.closed_loop_sim_config import ESTIMATORS, results_dir, load_result, metrics
-from core.plot_utils                          import plot_estimator_comparison
+from stage4_estimation.closed_loop import ESTIMATORS, results_dir, load_result, metrics
+from core.plot_utils                import plot_estimator_comparison
 
 
 def print_comparison(results: dict):
-    """Side-by-side table of the metrics of closed_loop_sim_config.print_summary."""
+    """Side-by-side table of the metrics of closed_loop.print_summary."""
     ms = {name: metrics(r) for name, r in results.items()}
     rows = [('‖Δp‖ steady state [mm]',   lambda m: 1e3 * np.linalg.norm(m['pos_err'])),
             ('‖Δv̂‖ steady state [mm/s]', lambda m: 1e3 * np.linalg.norm(m['v_err'])),
@@ -52,6 +52,8 @@ if __name__ == '__main__':
 
     x_refs = [r['x_ref'] for r in results.values()]
     assert all(np.allclose(x_refs[0], x) for x in x_refs), 'runs use different references'
+    dims = {name: r['X'].shape[1] for name, r in results.items()}
+    assert len(set(dims.values())) == 1, f'runs use different models (state dims {dims}) — re-run both'
 
     plot_estimator_comparison(results, x_refs[0],
                               title='Stage 4 — EKF vs MHE on the identical closed loop',

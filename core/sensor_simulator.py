@@ -12,6 +12,8 @@ Assumption (Stage 4, project-wide):
 
 Interface:
     plant produces x (13,)  →  sensor.measure(x)  →  y (10,)
+    motor model [x; f] (17,) →  same y = [p; q; ω]: the rotor thrusts are not
+    measured (no rpm telemetry assumed) and must be estimated.
     The sensor is disturbance-blind: it sees only the physical state,
     not the augmented disturbance vector d that lives in the estimator.
 
@@ -36,7 +38,7 @@ Not modeled:
 
 import numpy as np
 
-from core.quadrotor_model import NX, NY, IDX_Y
+from core.quadrotor_model import NX, NY, NXM, IDX_Y
 
 # Mocap-equivalent noise — the single definition used by the closed loop
 # (sensor) and by the EKF (matched R).
@@ -81,11 +83,13 @@ class SensorSimulator:
         Produce one measurement from the plant state.
 
         Args:
-            x: (13,) plant state [p(3); v(3); q(4); ω(3)]
+            x: (13,) plant state [p(3); v(3); q(4); ω(3)], or the
+               (17,) motor-model state [p; v; q; ω; f] (f is not measured)
         Returns:
             y: (10,) measurement [p(3); q(4); ω(3)]
         """
-        assert x.shape == (NX,), f'expected x of shape ({NX},), got {x.shape}'
+        assert x.shape in ((NX,), (NXM,)), \
+            f'expected x of shape ({NX},) or ({NXM},), got {x.shape}'
 
         y = x[IDX_Y].astype(float)     # [p; q; ω] — same selection as h(z)
 

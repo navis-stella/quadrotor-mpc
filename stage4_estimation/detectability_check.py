@@ -12,28 +12,30 @@ through the LMI condition of Theorem 2 in
     "Robust stability of moving horizon estimation for continuous-time
     systems", arXiv:2305.06614v2, 2024.
 
-System — the augmented model shared with the EKF, taken from
+System — the augmented thrust-lag model shared with the EKF, taken from
 quadrotor_model (no local copy of the dynamics):
-    ż = f(z, u, w) = [f(x, u, d); 0] + w       create_mhe_model()
-    y = h(z)       = [p; q; ω]                 measurement_expr()
+    ż = f(z, u, w) = [f(x, f, d); (u − f)/τ_m; 0] + w    create_thrust_lag_mhe_model()
+    y = h(z)       = [p; q; ω]                            measurement_expr()
 
-    z  (NZ = 19)  [px py pz, vx vy vz, qw qx qy qz, p q r, d_f(3), d_τ(3)]
-    u  (NU = 4)   rotor thrusts — known input (acados model.p)
-    w  (NW = 19)  process noise, additive on every derivative (model.u)
-    y  (NY = 10)
+    z  (NZM = 23) [px py pz, vx vy vz, qw qx qy qz, p q r, f(4), d_f(3), d_τ(3)]
+    u  (NU = 4)   thrust commands — known input (acados model.p)
+    w  (23)       process noise, additive on every derivative (model.u)
+    y  (NY = 10)  — the rotor thrusts f are NOT measured
 
-    d enters f linearly with constant coefficients, so A = ∂f/∂z depends
-    only on (q, ω, T_total) and the finite reduction below applies. The
-    question the certificate answers: can d — never measured, no dynamics
-    of its own — be reconstructed at rate κ? Only through d_f → v̇ → ṗ → y
-    and d_τ → ω̇ → y.
+    d enters f linearly with constant coefficients, the command u enters ḟ
+    linearly with constant coefficients, and the thrust states act through
+    the wrench: A = ∂f/∂z depends only on (q, ω, T_total = Σfᵢ) and the
+    finite reduction below applies. The question the certificate answers:
+    can f and d — never measured — be reconstructed at rate κ? Only through
+    their effect on the motion: Σf, d_f → v̇ → ṗ → y and differential f,
+    d_τ → ω̇ → y; f and d differ in their dynamics (−1/τ_m vs. 0).
 
 LMI (31), with D = ∂h/∂w = 0:
 
     [ PA + AᵀP + κP − CᵀRC    PB ]
     [ BᵀP                     −Q ]  ⪯ 0          ∀ (x, u, w) ∈ X × U × W
 
-    A = ∂f/∂z (q, ω, T_total),   B = ∂f/∂w = I₁₉,   C = ∂h/∂z (selection)
+    A = ∂f/∂z (q, ω, T_total),   B = ∂f/∂w = I₂₃,   C = ∂h/∂z (selection)
 
     ⇒ Assumption 1 with P1 = P2 = P and λ = e^{−κ}  (λ per SECOND).
 
@@ -47,23 +49,37 @@ Assumption 2 — why the sets look the way they do:
                                     convex hull (r_max > 1 covers small
                                     norm drift of the estimated quaternion)
       ω        box |ωᵢ| ≤ ω_max
-      T_total  [T_min, T_max]       A depends on u only via Σfᵢ  (asserted)
-      w        ℝ¹⁹                  A, B do not depend on w      (asserted)
+      f        box fᵢ ∈ [F_MIN, F_MAX]  A depends on f only via
+                                    T_total = Σfᵢ ∈ [4·F_MIN, 4·F_MAX] (asserted)
+      u        ℝ⁴                   A does not depend on the command (asserted)
+      w        ℝ²³                  A, B do not depend on w      (asserted)
 
 Finite reduction (paper, footnote 4 — "solve at the vertices, convexity
 does the rest"):
-    A is affine in (q, ω) jointly and affine in T_total   (asserted
-    symbolically), and the LMI is affine in A. Therefore the LMI on
+    With the thrusts as STATES, A contains ∂v̇/∂f = r(q)/m · 1ᵀ, the thrust
+    direction r(q) = R(q)e₃ = [2(qx qz + qw qy), 2(qy qz − qw qx), 1 − 2(qx² + qy²)],
+    QUADRATIC in q. (On the 13-state model the thrusts were the input and A
+    was affine in q.) Lifting fixes the argument: with r treated as its own
+    variable, A is affine in (q, ω, r) jointly and affine in T_total (all
+    asserted), and the LMI is affine in A. The relevant points are the
+    lifted ones (q, r(q)), and every one with ‖q‖ < ρ is the MIDPOINT of two
+    lifted points with ‖q‖ = ρ: split q = (a, b), a = (qw, qz), b = (qx, qy);
+    r is bilinear in (a, b) plus −2‖b‖². The two sphere points (a ± α·u, b),
+    u ⊥ a unit, α² = ρ² − ‖q‖², average to q, keep ‖b‖, and their r average
+    to r(q) because the bilinear part is linear in a. So the lifted ball lies
+    in the convex hull of the lifted sphere. Evaluating A at a pool
+    quaternion gives r(q) exactly, so the algorithm is unchanged: the LMI on
 
         {attitude points on ‖q‖ = r_max, both hemispheres}
       × {8 vertices of the ω box} × {T_min, T_max}
 
-    implies it on the convex hull of those points. Only q needs genuine
-    gridding. The attitude set is refined by a cutting-plane loop:
+    implies it on the (lifted) convex hull of those points. Only q needs
+    genuine gridding. The attitude set is refined by a cutting-plane loop:
         solve on an active set → check the whole attitude pool → add the
         worst violators → repeat until no violations.
     Residual gap: the hull of a finite pool is a polytope inscribed in the
-    ball. A random off-pool spot check on the sphere guards it.
+    lifted sphere set. Random off-pool spot checks guard it — on the sphere
+    and in the interior ‖q‖ < r_max (the latter tests the lifting argument).
 
 Downstream — what the MHE must match for Theorem 1 to apply
 (equidistant sampling, T = N·Ts ⇒ Remark 5: δ̄ = 0):
@@ -71,8 +87,8 @@ Downstream — what the MHE must match for Theorem 1 to apply
     cost      (9) :  prior  2‖χ̄ − x̂(t_i − T)‖²_P · λ^T
                      stage  (2‖w‖²_Q + ‖Δy‖²_R) · λ^{T−τ}
     prior         :  x̂(t_i − T) is the estimate produced N iterations ago
-    state bounds  :  |ω| ≤ ω_max in the MHE — the estimated trajectory must
-                     stay in X, constraint (8c)
+    state bounds  :  |ω| ≤ ω_max and F_MIN ≤ fᵢ ≤ F_MAX in the MHE — the
+                     estimated trajectory must stay in X, constraint (8c)
     Choosing N and discretizing the cost integral on the acados grid is
     done in ocp_config_mhe (load_mhe_params, export_drone_mhe_solver); this
     script is purely CT and depends on the decay rate only through κ.
@@ -92,28 +108,34 @@ Design order (check_detectability) — purely continuous time, no Ts:
 Output:
     data/mhe_params.npz with the CT quantities
     (P, Q, R, kappa, lam, T_hor_min, envelope, margins).
+    (The 13-state certificate that Stage 6 still uses is the frozen file
+    data/mhe_params_rigid.npz; this script only certifies the motor model.)
 
 Ported from the MATLAB IOSS verification (YALMIP + MOSEK) to
 CVXPY + MOSEK / CLARABEL / SCS.
 """
+
+import time
 
 import numpy as np
 import casadi as ca
 import cvxpy as cp
 
 from core.quadrotor_model import (
-    create_mhe_model, measurement_expr,
-    f_hover, F_MAX, OMEGA_MAX, NU, NX,
+    create_thrust_lag_mhe_model, measurement_expr,
+    m, f_hover, F_MIN, F_MAX, OMEGA_MAX, NU, NX, NXM,
 )
 from stage4_estimation.ocp_config_mhe import MHE_PARAMS_PATH, HORIZON_FACTOR, save_mhe_params
 
 STATE_NAMES  = ['px', 'py', 'pz', 'vx', 'vy', 'vz',
                 'qw', 'qx', 'qy', 'qz', 'p', 'q', 'r',
+                'f1', 'f2', 'f3', 'f4',
                 'dfx', 'dfy', 'dfz', 'dtx', 'dty', 'dtz']
 OUTPUT_NAMES = ['px', 'py', 'pz', 'qw', 'qx', 'qy', 'qz', 'p', 'q', 'r']
 
 IDX_P            = slice(0, 3)
 IDX_Q, IDX_OMEGA = slice(6, 10), slice(10, 13)
+IDX_F            = slice(NX, NXM)
 
 N_VERT = 16                     # 8 ω-box vertices × 2 thrust endpoints
 
@@ -128,11 +150,11 @@ def build_jacobians(n_probe=20, seed=0):
 
     Returns
     -------
-    jac_A_fun : ca.Function  (x(nx), u(4)) → A (nx×nx)
+    jac_A_fun : ca.Function  x(nx) → A (nx×nx)
     B         : ndarray (nx×nx)  = I
     C         : ndarray (10×nx)  constant selection y = [p; q; ω]
     """
-    model = create_mhe_model()
+    model = create_thrust_lag_mhe_model()
     x, w, u = model.x, model.u, model.p
     nx = x.rows()
     f = model.f_expl_expr
@@ -140,22 +162,41 @@ def build_jacobians(n_probe=20, seed=0):
 
     A_expr = ca.jacobian(f, x)
     B_expr = ca.jacobian(f, w)
-    jac_A_fun = ca.Function('A_mhe', [x, u], [A_expr], ['x', 'u'], ['A'])
+    jac_A_fun = ca.Function('A_mhe', [x], [A_expr], ['x'], ['A'])
 
     # ── Grid validity (exact, symbolic) ──
-    #    everything except (q, ω) — p, v and d — must drop out
-    x_ungridded = ca.vertcat(x[0:6], x[NX:])
+    #    everything except (q, ω, f) — p, v and d — must drop out, and the
+    #    command u enters ḟ with constant coefficients only
+    x_ungridded = ca.vertcat(x[0:6], x[NXM:])
     assert not ca.depends_on(A_expr, x_ungridded), \
         'A depends on p, v or d — they would have to be gridded'
+    assert not ca.depends_on(A_expr, u), \
+        'A depends on the command — U would have to be gridded'
     assert not ca.depends_on(A_expr, w), \
         'A depends on w — W would have to be gridded'
     assert not ca.depends_on(B_expr, ca.vertcat(x, u, w)), 'B is not constant'
 
-    # Vertex argument: A affine in z = (q, ω) jointly and affine in u
-    z = x[6:13]
-    assert not ca.depends_on(ca.jacobian(ca.vec(A_expr), z), z), \
-        'A is not affine in (q, ω) — vertex reduction invalid (normalization term in f?)'
-    assert not ca.depends_on(ca.jacobian(ca.vec(A_expr), u), u), \
+    # Vertex argument (lifted, see the header):
+    #   A is affine in (q, ω, r) with r = R(q)e₃ — the only part of A that is
+    #   not affine in (q, ω) is the block ∂v̇/∂f = R(q)e₃/m · 1ᵀ (thrust states
+    #   push along the body z-axis), and A is affine in the thrusts f.
+    z  = x[6:13]
+    fs = x[IDX_F]
+    qw, qx, qy, qz = x[6], x[7], x[8], x[9]
+    r_q = ca.vertcat(2 * (qx * qz + qw * qy),
+                     2 * (qy * qz - qw * qx),
+                     1 - 2 * (qx**2 + qy**2))       # R(q)e₃ as written in the model
+    A_vf = A_expr[3:6, IDX_F]
+    vf_gap = ca.Function('vf_gap', [x], [A_vf - ca.repmat(r_q / m, 1, NU)])
+    rng_vf = np.random.default_rng(seed + 1)
+    for _ in range(n_probe):
+        assert np.allclose(vf_gap(rng_vf.normal(size=nx)).full(), 0.0, atol=1e-12), \
+            '∂v̇/∂f is not R(q)e₃/m — lifted vertex argument invalid'
+    A_rest = ca.vertcat(ca.vec(A_expr[0:3, :]), ca.vec(A_expr[3:6, 0:NX]),
+                        ca.vec(A_expr[3:6, NXM:]), ca.vec(A_expr[6:, :]))
+    assert not ca.depends_on(ca.jacobian(A_rest, z), z), \
+        'A outside ∂v̇/∂f is not affine in (q, ω) — vertex reduction invalid'
+    assert not ca.depends_on(ca.jacobian(ca.vec(A_expr), fs), fs), \
         'A is not affine in the thrusts — T endpoints do not suffice'
 
     # ── Constant matrices ──
@@ -168,7 +209,7 @@ def build_jacobians(n_probe=20, seed=0):
     assert C.shape[1] == nx and np.allclose(C @ C.T, np.eye(ny)), \
         'C must be a selection matrix (h affine, Assumption 2)'
 
-    # ── A depends on u only through T_total = Σfᵢ ──
+    # ── A depends on the thrust states only through T_total = Σfᵢ ──
     rng = np.random.default_rng(seed)
     for _ in range(n_probe):
         xp = np.zeros(nx)
@@ -176,8 +217,11 @@ def build_jacobians(n_probe=20, seed=0):
         xp[IDX_Q]     = qp / np.linalg.norm(qp)
         xp[IDX_OMEGA] = rng.uniform(-3.0, 3.0, 3)
         split = rng.dirichlet(np.ones(NU)) * NU * f_hover
-        A_split = jac_A_fun(xp, split).full()
-        A_equal = jac_A_fun(xp, np.full(NU, split.sum() / NU)).full()
+        xe = xp.copy()
+        xp[IDX_F] = split
+        xe[IDX_F] = split.sum() / NU
+        A_split = jac_A_fun(xp).full()
+        A_equal = jac_A_fun(xe).full()
         assert np.allclose(A_split, A_equal, atol=1e-10), \
             'A depends on individual thrusts — grid over all 4, not T_total'
 
@@ -188,15 +232,15 @@ def eval_A_batch(jac_A_fun, quats, omegas, thrusts):
     """
     A at M points (q, ω, T_total), vectorized with CasADi map.
     quats (M, 4), omegas (M, 3), thrusts (M,)  →  A (M, nx, nx)
-    Position, velocity (and d) do not enter A; each rotor gets T_total / 4.
+    Position, velocity (and d) do not enter A; each thrust state gets T_total / 4.
     """
     M  = len(quats)
     nx = jac_A_fun.size1_in(0)
     X  = np.zeros((nx, M))
     X[IDX_Q]     = quats.T
     X[IDX_OMEGA] = omegas.T
-    U = np.tile(np.asarray(thrusts) / NU, (NU, 1))
-    out = jac_A_fun.map(M)(X, U).full()                 # nx × nx·M, hcat of blocks
+    X[IDX_F]     = np.tile(np.asarray(thrusts) / NU, (NU, 1))
+    out = jac_A_fun.map(M)(X).full()                    # nx × nx·M, hcat of blocks
     return out.reshape(nx, M, nx).transpose(1, 0, 2)
 
 
@@ -374,21 +418,26 @@ def certify(jac_A_fun, B, C, kappa, pool, omega_max, T_range,
     active = [int(i) for i in rng.choice(len(pool), n_init, replace=False)]
 
     for it in range(1, max_iter + 1):
+        t_sdp = time.perf_counter()
         status, solver, P, Q, R = solve_ioss_lmi(
             jac_A_fun, B, C, pool[active], omega_max, T_range, kappa,
             q_floor, r_floor, **solve_kw)
+        t_sdp = time.perf_counter() - t_sdp
         if P is None:
             print(f'    iter {it:2d}: SDP failed ({status}) with '
                   f'{len(active)} active attitudes')
             return None
 
+        t_chk = time.perf_counter()
         worst = worst_eig_per_quat(jac_A_fun, B, C, P, Q, R, kappa,
                                    pool, omega_max, T_range)
+        t_chk = time.perf_counter() - t_chk
         viol  = np.flatnonzero(worst > 0.0)
         print(f'    iter {it:2d}: {len(active):4d} active attitudes '
               f'({N_VERT * len(active)} LMIs), solver {solver}, '
               f'violators {viol.size:5d}/{len(pool)}, '
-              f'max λ = {worst.max():+.3e}')
+              f'max λ = {worst.max():+.3e}   '
+              f'[SDP {t_sdp:6.1f} s, pool check {t_chk:5.1f} s]', flush=True)
 
         if viol.size == 0:
             return dict(P=P, Q=Q, R=R, solver=solver, status=status,
@@ -410,22 +459,25 @@ def certify(jac_A_fun, B, C, kappa, pool, omega_max, T_range,
 
 
 def spot_check(jac_A_fun, B, C, P, Q, R, kappa, r_max, omega_max, T_range,
-               n=20000, seed=7, chunk=5000):
+               n=20000, seed=7, chunk=5000, interior=False):
     """
-    Off-pool random samples: attitude uniform on the sphere ‖q‖ = r_max,
-    ω and T uniform in the INTERIOR of their ranges.
+    Off-pool random samples: attitude uniform on the sphere ‖q‖ = r_max
+    (interior=True: radius uniform in [0, r_max]), ω and T uniform in the
+    INTERIOR of their ranges.
     - interior ω, T are implied by affinity → sanity check of that argument
     - off-pool attitudes probe the gap between the pool's hull and the ball
+    - interior attitudes test the lifting argument for ∂v̇/∂f = R(q)e₃/m
     Returns the worst eigenvalue (must be ≤ 0).
     """
     rng   = np.random.default_rng(seed)
     worst = -np.inf
     for s in range(0, n, chunk):
-        m  = min(chunk, n - s)
-        qs = rng.normal(size=(m, 4))
-        qs = r_max * qs / np.linalg.norm(qs, axis=1, keepdims=True)
-        om = rng.uniform(-omega_max, omega_max, (m, 3))
-        Tv = rng.uniform(T_range[0], T_range[1], m)
+        k  = min(chunk, n - s)
+        qs = rng.normal(size=(k, 4))
+        rad = rng.uniform(0.0, r_max, (k, 1)) if interior else r_max
+        qs = rad * qs / np.linalg.norm(qs, axis=1, keepdims=True)
+        om = rng.uniform(-omega_max, omega_max, (k, 3))
+        Tv = rng.uniform(T_range[0], T_range[1], k)
         A  = eval_A_batch(jac_A_fun, qs, om, Tv)
         worst = max(worst, lmi_max_eig(A, P, Q, R, kappa, B, C).max())
     return float(worst)
@@ -442,23 +494,24 @@ def check_detectability():
     assert 0.0 < lam < 1.0, 'need 0 < λ < 1'
     kappa     = -np.log(lam)            # [1/s]   decay rate in LMI (31), λ = e^{−κ}
     omega_max = OMEGA_MAX               # [rad/s] per axis — MHE box, MPC keeps 0.9·ω_max
-    T_range   = (0.0, NU * F_MAX)       # [N]     T_total, matches MPC bound 0 ≤ fᵢ ≤ F_MAX
+    T_range   = (NU * F_MIN, NU * F_MAX)  # [N]   T_total = Σfᵢ, thrust states in [F_MIN, F_MAX]
     r_max     = 1.02                    # [-]     quaternion ball radius (norm drift margin)
 
     # ── Step 1: Jacobians and structural checks ──
     print('═' * 72)
     print('  Stage 4b — i-iIOSS Detectability Certificate for Continuous-time Systems')
     print('  Schiller & Müller (2024), Theorem 2 / LMI (31)')
-    print('  model:  ż = [f(x, u, d); 0] + w   (create_mhe_model, z = [x; d])')
-    print('          y = [p; q; ω]             (measurement_expr)')
+    print('  model:  ż = [f(x, f, d); (u − f)/τ_m; 0] + w   '
+          '(create_thrust_lag_mhe_model, z = [x; f; d])')
+    print('          y = [p; q; ω]                          (measurement_expr, f unmeasured)')
     print('═' * 72)
 
     print('\n[1] Linearizing the MHE model ...')
     jac_A_fun, B, C = build_jacobians()
     nx, nw = B.shape
     ny     = C.shape[0]
-    print(f'    A: {nx}×{nx}, affine in (q, ω) and in T_total, '
-          f'independent of p, v, d, w  ✓')
+    print(f'    A: {nx}×{nx}, affine in (q, ω) and in f (only via T_total), '
+          f'independent of p, v, d, u, w  ✓')
     print(f'    B = I{nx}  ✓    C: {C.shape} selection  ✓    D = 0  ✓')
 
     # per-channel floors: exact kinematics (ṗ = v, q̇ = ½ q⊗ω) stay expensive
@@ -475,8 +528,9 @@ def check_detectability():
     print('\n[2] Sets (Assumption 2, convex):')
     print(f'    q      : ‖q‖ ≤ {r_max}   ({len(pool)} pool attitudes, both hemispheres)')
     print(f'    ω      : |ωᵢ| ≤ {omega_max} rad/s   (8 vertices)')
-    print(f'    T_total: [{T_range[0]:.2f}, {T_range[1]:.2f}] N   (2 endpoints)')
-    print(f'    p, v, w: unbounded   (A independent)')
+    print(f'    T_total: [{T_range[0]:.2f}, {T_range[1]:.2f}] N = Σfᵢ, fᵢ ∈ [F_MIN, F_MAX]   '
+          f'(2 endpoints)')
+    print(f'    p, v, d, u, w: unbounded   (A independent)')
     print(f'    decay:  λ = {lam} per s   ⇒   κ = −ln λ = {kappa:.4f} 1/s')
     print(f'            T_min = ln4/κ = {T_hor_min:.3f} s   (MHE horizon must exceed it)')
 
@@ -494,12 +548,15 @@ def check_detectability():
 
     P_val, Q_val, R_val = cert['P'], cert['Q'], cert['R']
 
-    # ── Step 4: Off-pool spot check ──
-    print('\n[4] Off-pool spot check (random attitudes on the sphere, '
-          'interior ω and T) ...')
-    spot_max = spot_check(jac_A_fun, B, C, P_val, Q_val, R_val, kappa,
+    # ── Step 4: Off-pool spot checks ──
+    print('\n[4] Off-pool spot checks (random attitudes, interior ω and T) ...')
+    spot_sph = spot_check(jac_A_fun, B, C, P_val, Q_val, R_val, kappa,
                           r_max, omega_max, T_range)
-    print(f'    max λ = {spot_max:+.3e}')
+    spot_int = spot_check(jac_A_fun, B, C, P_val, Q_val, R_val, kappa,
+                          r_max, omega_max, T_range, interior=True, seed=8)
+    spot_max = max(spot_sph, spot_int)
+    print(f'    on the sphere ‖q‖ = {r_max}:   max λ = {spot_sph:+.3e}')
+    print(f'    inside the ball ‖q‖ < {r_max}: max λ = {spot_int:+.3e}   (lifting argument)')
     if spot_max > 0.0:
         print('  ✗ Spot check FAILED — the pool is too coarse. '
               'Refine attitude_pool() and re-run.')
@@ -531,7 +588,7 @@ def check_detectability():
           f'(Theorem 1, (18))')
     print('      prior     2·‖χ̄ − x̂(t_i − T)‖²_P · λ^T      (x̂ from time t_i − T)')
     print('      stage     (2·‖w‖²_Q + ‖Δy‖²_R) · λ^(T−τ)   (discretized in ocp_config_mhe)')
-    print(f'      bounds    |ω| ≤ {omega_max} rad/s on the estimated trajectory')
+    print(f'      bounds    |ω| ≤ {omega_max} rad/s, F_MIN ≤ fᵢ ≤ F_MAX on the estimated trajectory')
 
     save_mhe_params(
         MHE_PARAMS_PATH,

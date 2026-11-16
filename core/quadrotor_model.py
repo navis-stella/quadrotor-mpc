@@ -787,3 +787,117 @@ def rotor_plant_hover_state() -> np.ndarray:
     x[6]      = 1.0
     x[NX:NXM] = OMEGA_ROTOR_HOVER
     return x
+
+
+# ─────────────────────────────────────────────────────────────────
+# Augmented thrust-lag model z = [x; f; d]  (Stage 3–4 EKF)
+# ─────────────────────────────────────────────────────────────────
+#   ż = [f(x, f, d); (f_cmd − f)/τ_m; 0]   — the MPC model with d as states.
+#   Measurement on the motor model (Stage 4): y = [p; q; ω] = z[IDX_Y], as on
+#   the rigid body — the thrusts f are NOT measured and are estimated with v, d.
+#   IDX_Y_TL / NYM describe the alternative with ESC rpm telemetry
+#   (y = [p; q; ω; f]); only the observability check uses it, for comparison.
+NZM      = NXM + ND                                       # 23
+IDX_Y_TL = np.concatenate([IDX_Y, np.arange(NX, NXM)])    # [p; q; ω; f] = z[IDX_Y_TL]
+NYM      = len(IDX_Y_TL)                                  # 14
+
+
+def _build_thrust_lag_augmented():
+    """(z, u, ż) of the augmented thrust-lag model, z = [x (13); f (4); d (6)]."""
+    s = _build_thrust_lag_symbols()
+    d = ca.SX.sym('d', ND)
+    z = ca.vertcat(s['x'], d)
+    z_dot = ca.vertcat(_build_thrust_lag_f_expl(s, d), ca.SX.zeros(ND))
+    return z, s['u'], z_dot
+
+
+def get_thrust_lag_augmented_dynamics():
+    """
+    Continuous augmented thrust-lag dynamics as CasADi functions
+    (counterpart of get_augmented_dynamics; observability check):
+
+        f_aug(z, u) = ż  (23,),     F_func(z, u) = ∂ż/∂z  (23×23)
+    """
+    z, u, z_dot = _build_thrust_lag_augmented()
+    f_aug  = ca.Function('f_aug_tl', [z, u], [z_dot], ['z', 'u'], ['z_dot'])
+    F_func = ca.Function('F_aug_tl', [z, u], [ca.jacobian(z_dot, z)], ['z', 'u'], ['F'])
+    return f_aug, F_func
+
+
+def get_thrust_lag_augmented_step(Ts: float, n_steps: int = 2):
+    """
+    One discrete prediction step of the augmented thrust-lag model and its
+    exact Jacobian (EKF prediction):
+
+        Phi(z, u) = RK4 over Ts in n_steps substeps    (23,)
+        F_d(z, u) = ∂Phi/∂z                            (23×23)
+
+    n_steps = 2 as the OCP integrator (τ_m = 30 ms < Ts = 50 ms). F_d is the
+    linearization of exactly the map that predicts the mean; the Euler form
+    I + F_c·Ts would give the thrust lag the factor 1 − Ts/τ_m = −0.67
+    instead of e^{−Ts/τ_m} = 0.19.
+    """
+    z_sym, u, z_dot = _build_thrust_lag_augmented()
+    f = ca.Function('f_aug_tl', [z_sym, u], [z_dot])
+
+    z = ca.SX.sym('z', NZM)
+    h = Ts / n_steps
+    zk = z
+    for _ in range(n_steps):
+        k1 = f(zk,              u)
+        k2 = f(zk + h / 2 * k1, u)
+        k3 = f(zk + h / 2 * k2, u)
+        k4 = f(zk + h * k3,     u)
+        zk = zk + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    Phi = ca.Function('Phi_aug_tl', [z, u], [zk], ['z', 'u'], ['z_next'])
+    F_d = ca.Function('F_d_aug_tl', [z, u], [ca.jacobian(zk, z)], ['z', 'u'], ['F_d'])
+    return Phi, F_d
+
+
+def create_thrust_lag_mhe_model() -> AcadosModel:
+    """
+    Augmented thrust-lag dynamics as an acados model for the Lyapunov MHE
+    (counterpart of create_mhe_model):
+
+        ż = f_aug(z, f_cmd) + w,     z ∈ R^23,  w ∈ R^23 (additive on every derivative)
+
+        model.x = z = [x(13); f(4); d(6)]
+        model.u = w         process noise — the MHE's decision variable
+        model.p = f_cmd     known thrust commands (ocp_config_mhe augments model.p)
+
+    Certifiable for the same reason as the 13-state model: d enters linearly
+    with constant coefficients, the commands enter ḟ linearly with constant
+    coefficients, and ∂f/∂z depends only on (q, ω, Σf).
+    """
+    z, u, z_dot = _build_thrust_lag_augmented()
+    w = ca.SX.sym('w', NZM)
+
+    model             = AcadosModel()
+    model.name        = 'quadrotor_thrust_lag_mhe'
+    model.x           = z
+    model.u           = w
+    model.p           = u
+    model.xdot        = ca.SX.sym('zdot', NZM)
+    model.f_expl_expr = z_dot + w
+    return model
+
+
+def thrust_lag_augmented_hover_point():
+    """(z_hover (23), u_hover (4)): level hover, f = f_hover, d = 0."""
+    x_hover, u_hover = thrust_lag_hover_point()
+    return np.concatenate([x_hover, np.zeros(ND)]), u_hover
+
+
+def project_thrust_lag_measurement(y: np.ndarray) -> np.ndarray:
+    """
+    Prior z̄₀ (23) of the augmented thrust-lag model from one measurement
+    y = [p; q; ω] (10):
+        p, q, ω ← measured,    v ← 0,    f ← f_hover,    d ← 0
+    f_hover is the natural guess for a drone that starts hovering; the EKF's
+    P0 on f says how much it trusts it.
+    """
+    z = np.zeros(NZM)
+    z[IDX_Y] = y
+    z[NX:NXM] = f_hover
+    return z

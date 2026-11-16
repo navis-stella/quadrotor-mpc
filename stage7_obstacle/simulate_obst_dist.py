@@ -1,7 +1,7 @@
 """
 simulate_obst_dist.py — Stage 7a Obstacle Avoidance with a Distance Constraint
 ==============================================================================
-Entry point: the Stage 6 helix through three pillars (obstacle_sim_config),
+Entry point: the Stage 6 helix through three pillars (closed_loop),
 each pillar a soft squared-distance constraint on the predicted positions:
 
     hⱼ(p_i) = ‖p_xy,i − cⱼ‖² − r_safe² ≥ 0        i = 1..N
@@ -21,7 +21,7 @@ Run:  python -m stage7_obstacle.simulate_obst_dist  → results/stage7a_obst_dis
 import os
 os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries load
 
-import stage7_obstacle.obstacle_sim_config as osc
+import stage7_obstacle.closed_loop as cl
 
 RESULTS_DIR = os.path.join('results', 'stage7a_obst_dist')
 
@@ -30,6 +30,6 @@ RESULTS_DIR = os.path.join('results', 'stage7a_obst_dist')
 # Main
 # ─────────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    res = osc.simulate()
-    osc.summarize(res, 'Stage 7a — Obstacle avoidance, distance constraint (nominal, full state)')
-    osc.make_figures(res, RESULTS_DIR, 'Stage 7a — Obstacle avoidance')
+    res = cl.simulate()
+    cl.summarize(res, 'Stage 7a — Obstacle avoidance, distance constraint (nominal, full state)')
+    cl.make_figures(res, RESULTS_DIR, 'Stage 7a — Obstacle avoidance')

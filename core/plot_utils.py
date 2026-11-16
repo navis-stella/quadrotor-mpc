@@ -520,6 +520,50 @@ def plot_velocity_estimation(X:         np.ndarray,
 
 
 # ─────────────────────────────────────────────────────────────────
+# Thrust Estimation  (Stage 4 motor model — f is not measured)
+# ─────────────────────────────────────────────────────────────────
+def plot_thrust_estimation(X:         np.ndarray,
+                           X_hat:     np.ndarray,
+                           U:         np.ndarray,
+                           Ts:        float,
+                           title:     str,
+                           save_path: str,
+                           F_act:     np.ndarray = None,
+                           Ts_act:    float      = None):
+    """
+    True rotor thrust vs the estimate f̂ for each motor, with the command.
+
+    X, X_hat: (n+1, 17) [x; f] true / estimated, sampled every Ts
+    U:        (n, 4) thrust commands (held over each Ts)
+    F_act:    optional rotor thrust on a finer grid Ts_act (plant substeps)
+    """
+    t = np.arange(X.shape[0]) * Ts
+    fig, axes = plt.subplots(2, 2, figsize=(15, 7), sharex=True)
+    fig.suptitle(title, fontsize=14)
+
+    for i, ax in enumerate(axes.ravel()):
+        ax.step(np.arange(U.shape[0]) * Ts, U[:, i], where='post',
+                color='0.6', lw=0.8, label='command f_cmd')
+        if F_act is not None:
+            ax.plot(np.arange(F_act.shape[0]) * Ts_act, F_act[:, i], 'r--', lw=1.2,
+                    label='true k_f Ω²')
+        else:
+            ax.plot(t, X[:, 13+i], 'r--', lw=1.2, label='true k_f Ω²')
+        ax.plot(t, X_hat[:, 13+i], 'b', lw=1.2, label='estimate f̂')
+        ax.set_ylabel(f'f{i+1} [N]')
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=8, loc='upper right')
+    for ax in axes[1]:
+        ax.set_xlabel('t [s]')
+
+    plt.tight_layout()
+    _ensure_dir(save_path)
+    plt.savefig(save_path, dpi=150)
+    _show()
+    print(f'Plot saved: {save_path}')
+
+
+# ─────────────────────────────────────────────────────────────────
 # Computation Time  (estimator vs MPC)
 # ─────────────────────────────────────────────────────────────────
 _C_MPC, _C_EST = '#1f77b4', '#d62728'
@@ -587,7 +631,7 @@ def plot_estimator_comparison(results:   dict,
     """
     Overlay the runs of several estimators on the identical closed loop.
 
-    results: {name: result dict from closed_loop_sim_config.simulate (or load_result)}
+    results: {name: result dict from closed_loop.simulate (or load_result)}
     Panels:  tracking error ‖p − p_ref‖, velocity estimation error ‖v̂ − v‖,
              force-disturbance estimation error ‖d̂_f − d_f‖,
              estimator computation time — all on log scales

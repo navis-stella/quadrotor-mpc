@@ -332,7 +332,7 @@ $`\max_i \lvert\omega_i\rvert > 0.97 \cdot 1.8`$ rad/s.
 
 ### 10.1 Warm start without projection
 
-`obstacle_sim_config.py`: `traj.shift_warm_start(solver, ref.x_r, ref.u_r, N)` instead of
+`closed_loop.py`: `traj.shift_warm_start(solver, ref.x_r, ref.u_r, N)` instead of
 `obs.shift_warm_start(..., PILLARS)` — the Stage 6 function takes no pillars.
 
 | Warm start | max slack | min gap (samples / between) | at the rate bound |
@@ -365,7 +365,7 @@ happens later in the swerve, when the quadrotor has already left the reference.
 
 ### 10.3 Pillars centred on the path
 
-`obstacle_sim_config.py`: radial offset `0.0` for all three pillars in `PILLAR_SITES`.
+`closed_loop.py`: radial offset `0.0` for all three pillars in `PILLAR_SITES`.
 
 | Crossing | P1 | P2 | P3 |
 |---|---|---|---|
@@ -390,7 +390,7 @@ needed slack up to 0.78 m².
 
 ### 10.4 Shorter horizon
 
-`obstacle_sim_config.py`: `T_HORIZON` and `N`. Note `TS = T_HORIZON / N`: changing only `N` keeps the
+`closed_loop.py`: `T_HORIZON` and `N`. Note `TS = T_HORIZON / N`: changing only `N` keeps the
 horizon and changes the **sample time**, for the plant too.
 
 | $N$ | $T$ | $T_s$ | max slack | min gap (predicted / samples / between) | at the rate bound |
@@ -447,7 +447,7 @@ reports a dimension error.
 | File | Role |
 |---|---|
 | `ocp_config_obstacle.py` | `Pillar`, `h_pillars()`, `add_pillar_constraints()`, `create_solver()`, projected `shift_warm_start()`, `clearance()`, `clearance_between_samples()`, `obstacle_slack()` |
-| `obstacle_sim_config.py` | scene (`PILLAR_SITES`), closed loop `simulate(gamma=None)`, `summarize()`, `make_figures()` — shared with Stage 7b |
+| `closed_loop.py` | scene (`PILLAR_SITES`), closed loop `simulate(gamma=None)`, `summarize()`, `make_figures()` — shared with Stage 7b |
 | `simulate_obst_dist.py` | entry point: `simulate()` with the distance constraint → `results/stage7a_obst_dist/` |
 | `ocp_config_trajectory.py` | Stage 6 OCP, now split into `create_ocp()` + `create_solver()` (unchanged result) |
 | `plot_utils.py` | `plot_obstacle_topview()`, `plot_obstacle_clearance()` (new); `plot_3d_trajectory(..., cylinders=)` |
