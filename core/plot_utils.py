@@ -223,7 +223,10 @@ def plot_inputs(U:            np.ndarray,
                 save_path:    str,
                 t_switch:     float = None,
                 switch_label: str   = 'switch',
-                U_ref:        np.ndarray = None):
+                U_ref:        np.ndarray = None,
+                F_act:        np.ndarray = None,
+                Ts_act:       float      = None,
+                f_bounds:     tuple      = None):
     """
     Plot input (motor thrust) trajectories.
 
@@ -233,8 +236,15 @@ def plot_inputs(U:            np.ndarray,
 
     Optional (Stage 3): t_switch [s] instant to mark (offset-free activation).
     Optional (Stage 6): U_ref (n, 4) feedforward u_r — dashed, same colors.
+    Optional (motor dynamics):
+        F_act     (m, 4) thrust the rotors actually produce, k_f Ω², sampled
+                  every Ts_act (default Ts) — solid lines; U (the command)
+                  is then drawn as thin steps
+        f_bounds  (f_min, f_max) input bounds, dotted red lines
     """
     t_u = np.arange(U.shape[0]) * Ts
+    if F_act is not None:
+        t_f = np.arange(F_act.shape[0]) * (Ts if Ts_act is None else Ts_act)
 
     fig, axes = plt.subplots(1, 2, figsize=(14, 4))
     fig.suptitle(title, fontsize=14)
@@ -245,11 +255,21 @@ def plot_inputs(U:            np.ndarray,
 
     ax = axes[0]
     for i in range(NU):
-        ax.step(t_u, U[:, i], where='post', color=colors[i],
-                linewidth=1.2, label=input_labels[i])
+        if F_act is None:
+            ax.step(t_u, U[:, i], where='post', color=colors[i],
+                    linewidth=1.2, label=input_labels[i])
+        else:
+            ax.plot(t_f, F_act[:, i], color=colors[i], linewidth=1.4,
+                    label=f'{input_labels[i]} (rotor k_f Ω²)')
+            ax.step(t_u, U[:, i], where='post', color=colors[i],
+                    linewidth=0.7, alpha=0.6,
+                    label='commands f_cmd' if i == 0 else None)
         if U_ref is not None:
             ax.step(t_u, U_ref[:, i], where='post', color=colors[i],
                     linestyle='--', linewidth=0.9, alpha=0.8)
+    if f_bounds is not None:
+        for lim in f_bounds:
+            ax.axhline(lim, color='r', linestyle=':', linewidth=0.9)
     ax.axhline(f_hover, color='k', linestyle='--', linewidth=1, alpha=0.5, label='f_hover')
     _mark_switch(ax, t_switch, switch_label)
     ax.set_ylabel('thrust [N]')
@@ -260,7 +280,12 @@ def plot_inputs(U:            np.ndarray,
     # ── Right: total thrust ────────────────────────────────────
     ax = axes[1]
     T_total = U.sum(axis=1)
-    ax.step(t_u, T_total, where='post', color='purple', linewidth=1.2, label='T_total')
+    if F_act is None:
+        ax.step(t_u, T_total, where='post', color='purple', linewidth=1.2, label='T_total')
+    else:
+        ax.plot(t_f, F_act.sum(axis=1), color='purple', linewidth=1.4, label='T_total (rotors)')
+        ax.step(t_u, T_total, where='post', color='purple', linewidth=0.7, alpha=0.6,
+                label='Σ f_cmd')
     if U_ref is not None:
         ax.step(t_u, U_ref.sum(axis=1), where='post', color='purple',
                 linestyle='--', linewidth=0.9, alpha=0.8, label='T_ref (u_r)')
