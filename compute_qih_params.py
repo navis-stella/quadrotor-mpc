@@ -87,7 +87,7 @@ def compute_qih_offline_parameters(Q: np.ndarray,
     A_c, B_c = get_hover_linearization()
 
     # ── Step 2: Remove qw → 12-state reduced system ────────────
-    A_red = A_c[np.ix_(IDX_KEEP, IDX_KEEP)]     # (12×12)
+    A_red = A_c[np.ix_(IDX_KEEP, IDX_KEEP)]      # (12×12)
     B_red = B_c[IDX_KEEP, :]                     # (12×4)
     Q_red = Q[np.ix_(IDX_KEEP, IDX_KEEP)]        # (12×12)
 

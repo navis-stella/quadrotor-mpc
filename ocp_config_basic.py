@@ -37,7 +37,7 @@ def create_solver(x_ref:     np.ndarray,
 
     Cost structure (NONLINEAR_LS):
         Stage:    || [x; u] - [x_ref; u_ref] ||^2_W         (17-dim)
-        Terminal: || x_N - x_ref ||^2_Q                      (13-dim)
+        Terminal: || x_N - x_ref ||^2_Q                     (13-dim)
 
     Constraints:
         0 <= fi <= F_MAX   for each motor  (box constraints on input)
@@ -69,7 +69,7 @@ def create_solver(x_ref:     np.ndarray,
          1.,   1.,    1.            # p,  q,  r           angular rate: low
     ])
 
-    R = np.diag([0.1, 0.1, 0.1, 0.1])   # f1, f2, f3, f4
+    R = np.diag([0.1, 0.1, 0.1, 0.1])    # f1, f2, f3, f4
 
     ocp.cost.W   = block_diag(Q, R)      # stage weight    (17×17)
     ocp.cost.W_e = Q                     # terminal weight (13×13) — simple, no DARE
@@ -82,7 +82,7 @@ def create_solver(x_ref:     np.ndarray,
     ocp.constraints.x0 = np.zeros(NX)                  # updated at runtime
 
     ocp.constraints.lbu   = np.zeros(NU)
-    ocp.constraints.ubu   = np.full(NU, F_MAX)             # shared envelope
+    ocp.constraints.ubu   = np.full(NU, F_MAX)         # shared envelope
     ocp.constraints.idxbu = np.arange(NU)
 
     # ── Solver Options ───────────────────────────────────────────
