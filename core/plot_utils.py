@@ -400,9 +400,9 @@ def plot_terminal_constraint(X_N:       np.ndarray,
     ax.semilogy(t, ratio, 'b', linewidth=1.2)
     ax.axhline(1.0, color='r', linestyle='--', linewidth=1.5,
                label='boundary (ratio = 1)')
-    ax.fill_between(t, 0, 1, alpha=0.1, color='green',
-                    transform=ax.get_xaxis_transform(),
-                    label='feasible region')
+    y_lo, y_hi = ax.get_ylim()
+    ax.axhspan(y_lo, 1.0, alpha=0.1, color='green', label='inside Ω_α (slack = 0)')
+    ax.set_ylim(y_lo, y_hi)
     ax.set_ylabel(r'$V_N / \alpha$  (log scale)')
     ax.set_xlabel('t [s]')
     ax.legend(fontsize=9)

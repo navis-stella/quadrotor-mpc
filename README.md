@@ -19,7 +19,7 @@ results with plots. This README gives the overview.
 | Input (4) | thrust **commands** to the four ESCs, $`f_{\min} \le f_{\text{cmd},i} \le f_{\max} = 3 f_{\text{hover}} \approx 7.36`$ N, idle thrust $f_{\min} \approx 0.074$ N |
 | Plant (17) | rigid body + rotor speeds $\Omega$: inverse thrust map $`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, ESC speed loop $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$ with $\tau_m = 30$ ms, thrust $`f = k_f \Omega^2`$ |
 | MPC prediction model (17) | rigid body + rotor thrusts $f$ with the lag $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ (equal to the plant to first order); rotor speeds measured, passed as $`f = k_f \Omega^2`$ |
-| Migration to the motor dynamics | done: Stage 1. Stages 2–9 still use the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
+| Migration to the motor dynamics | done: Stages 1–2. Stages 3–9 still use the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
 | Layout | `+` configuration, hover thrust $f_{\text{hover}} = mg/4 \approx 2.45$ N |
 | Disturbance (Stages 3–4) | constant force (world frame) and torque (body frame), $d \in \mathbb{R}^6$ |
 | Reference trajectory (Stage 6) | analytic helix, mapped by differential flatness to a full state and input reference $(x_r(t), u_r(t))$ |
@@ -51,8 +51,8 @@ Equations of motion, motor dynamics, disturbance model and quaternion convention
 | Stage | Result |
 |-------|--------|
 | 1 | Hover-to-hover step with motor dynamics converges in about 2 s with no visible offset; the MPC leads the 30 ms rotor lag with its commands. $W_e = Q$ gives no stability certificate. |
-| 2a | The certified terminal set is tiny ($\alpha \approx 10^{-4}$); the trajectory enters it only after 2.3 s, so the guarantee covers just the final approach. |
-| 2b | Same nominal trajectory as Stage 1, now with the LQR cost-to-go as terminal cost; used as the terminal cost from Stage 3 on. |
+| 2a | Certified by the decrease condition itself (sampling + local maximization) with a tuned auxiliary gain, the terminal set is still small: about ±7 mm in position, ±1° tilt. The trajectory enters it after 1.05 s, so the guarantee covers only the final approach. |
+| 2b | Same nominal trajectory as Stage 1, now with the LQR cost-to-go as terminal cost (DARE weights scaled by $T_s$ to match acados' cost scaling); used as the terminal cost from Stage 3 on. |
 | 3 | Under wind and a 30% mass error, standard NMPC settles 58 / −36 / −79 mm off target; offset-free NMPC removes the offset to below 0.05 mm. |
 | 4a | With only $`[p;\, q;\, \omega]`$ measured, the EKF keeps tracking unbiased; velocity estimation error 53 mm/s, force-disturbance error 0.14 N, 0.7 ms per step. |
 | 4b | The certified MHE ($T = 3$ s $> T_{\min} = 2$ s) estimates velocity $5\times$ and the disturbance $18\times$ more accurately than the EKF, at 14 ms per step (budget 50 ms). |
@@ -86,7 +86,7 @@ quadrotor_3d_nmpc/
 │   ├── ocp_config_basic.py
 │   └── simulate_basic.py         #             entry point
 ├── stage2_terminal/              # Stage 2   — terminal ingredients
-│   ├── compute_qih_params.py     #   2a: offline CARE / Lyapunov P, α, Lipschitz check
+│   ├── compute_qih_params.py     #   2a: offline CARE / Lyapunov P, α (decrease condition), gain sweep
 │   ├── ocp_config_qih.py         #   2a: P_lyap + soft terminal set
 │   ├── simulate_qih.py           #   2a: entry point (+ terminal-set diagnostic)
 │   ├── ocp_config_dare.py        #   2b: P_lqr terminal cost
