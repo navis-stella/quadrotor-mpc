@@ -69,7 +69,9 @@ from core.quadrotor_model                    import (
     create_disturbance_plant, quat_normalize, project_measurement,
     OMEGA_MAX, NX, NU, ND, NZ,
 )
-from stage3_offsetfree.ocp_config_offsetfree import create_solver, set_disturbance_param, set_reference
+from stage3_offsetfree.ocp_config_offsetfree import (create_rigid_body_solver as create_solver,
+                                                     set_rigid_body_reference as set_reference,
+                                                     set_disturbance_param)
 from core.ss_target                          import compute_ss_target, print_ss_target
 from core.sensor_simulator                   import SensorSimulator, MOCAP_NOISE_STD
 from stage4_estimation.state_est_ekf         import ExtendedKalmanFilter, default_ekf_R

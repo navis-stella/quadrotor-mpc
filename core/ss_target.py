@@ -90,7 +90,8 @@ def _rotmat_to_quat(R: np.ndarray) -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────
 def compute_ss_target(x_ref: np.ndarray,
                       d_hat: np.ndarray,
-                      f_max: float = None) -> tuple:
+                      f_max: float = None,
+                      f_min: float = 0.0) -> tuple:
     """
     Compute the physically consistent equilibrium (x_s, u_s) under d̂.
 
@@ -120,10 +121,13 @@ def compute_ss_target(x_ref: np.ndarray,
         x_ref:  (13,) desired reference state
         d_hat:  (6,)  estimated disturbance [d_fx, d_fy, d_fz, d_tx, d_ty, d_tz]
         f_max:  maximum motor thrust [N] (default: F_MAX = 3 × f_hover)
+        f_min:  minimum motor thrust [N] (default 0; the motor-dynamics
+                stages pass F_MIN, the idle thrust)
 
     Returns:
-        x_s:  (13,) equilibrium state (p=p_ref, v=0, q=q_s, ω=0)
-        u_s:  (4,)  equilibrium motor thrusts
+        x_s:  (13,) equilibrium body state (p=p_ref, v=0, q=q_s, ω=0)
+        u_s:  (4,)  equilibrium motor thrusts — on the motor-dynamics model
+              also the equilibrium thrust STATES f_s (f = f_cmd at rest)
     """
     if f_max is None:
         f_max = F_MAX
@@ -180,7 +184,7 @@ def compute_ss_target(x_ref: np.ndarray,
     u_s = _M_inv @ wrench_s
 
     # ── Step 4: Clip motor forces to physical limits ────────────
-    u_s_clipped = np.clip(u_s, 0.0, f_max)
+    u_s_clipped = np.clip(u_s, f_min, f_max)
     if not np.allclose(u_s, u_s_clipped, atol=1e-6):
         print(f'  [ss_target] WARNING: motor limits active!')
         print(f'    u_s raw    = {u_s}')

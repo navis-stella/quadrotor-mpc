@@ -2,10 +2,11 @@
 
 | | |
 |---|---|
-| Git tag | `stage3` |
-| Files | `ocp_config_offsetfree.py`, `ekf_aug.py`, `ss_target.py`, `simulate_offsetfree.py` (+ shared `quadrotor_model.py`, `plot_utils.py`) |
+| Git tag | `stage3` (13-state model; tag `rigid-body` = all stages before the motor dynamics) |
+| Files | `stage3_offsetfree/` `ocp_config_offsetfree.py`, `ekf_aug.py`, `simulate_offsetfree.py` (+ `core/` `ss_target.py`, `quadrotor_model.py`, `plot_utils.py`) |
+| Model | motor dynamics: MPC state $[x;\, f]$ (17), input $f_{\text{cmd}}$, rotor-speed plant ([model](quadrotor_model.md)) |
 | Method | disturbance-augmented prediction model + augmented EKF + analytical steady-state target calculator |
-| Terminal cost | $W_e = P_{\text{lqr}}$ (DARE, unchanged from [Stage 2b](stage2_terminal_cost.md)) |
+| Terminal cost | $W_e = P_{\text{dare}}$ ($T_s$-scaled DARE, unchanged from [Stage 2b](stage2_terminal_cost.md)) |
 | Results | `results/stage3_offsetfree/` |
 
 ## 1. Motivation
@@ -57,32 +58,43 @@ A 6-dimensional constant disturbance, split by where it enters:
 I \dot\omega = \tau(u) - \omega \times (I\omega) + d_\tau, \qquad \dot d = 0,
 ```
 
-with $\dot p$ and $\dot q$ unchanged. One dynamics builder (`_build_f_expl`) produces three
-variants, so all of them share exactly the same physics:
+with $\dot p$ and $\dot q$ unchanged, and the thrust lag $\dot f = (f_{\text{cmd}} - f)/\tau_m$ of
+the motor model alongside. The disturbance acts on the body, not on the motors. One dynamics
+builder (`_build_f_expl`) produces every variant, so all of them share exactly the same physics:
 
 | Variant | Role of $d$ | Dimension | Used by |
 |---|---|---|---|
-| `create_nominal_model()` | $d = 0$ | $n_x = 13$ | Stages 1–2 |
-| `create_disturbance_model()` / `create_disturbance_plant()` | runtime parameter `model.p` | $n_x = 13$, $p \in \mathbb{R}^6$ | MPC ($p = \hat d$) and plant ($p = d_{\text{true}}$) |
-| `get_augmented_dynamics_casadi()` | extra states | $n_z = 19$ | EKF only |
+| `create_thrust_lag_model()` | $d = 0$ | $n_x = 17$ | Stages 1–2 |
+| `create_thrust_lag_disturbance_model()` | runtime parameter `model.p` | $n_x = 17$, $p \in \mathbb{R}^6$ | MPC, $p = \hat d$ |
+| `create_rotor_plant()` | runtime parameter `model.p` | $[x;\, \Omega]$, $p \in \mathbb{R}^6$ | plant, $p = d_{\text{true}}$ |
+| `ekf_aug.get_augmented_step()` | extra states | $n_z = 23$ | EKF only |
 
-The MPC never sees $d$ as a state: its dimension stays 13, and $\hat d$ is injected as a
+The MPC never sees $d$ as a state: its dimension stays 17, and $\hat d$ is injected as a
 parameter. Only the estimator works with the augmented state.
 
 ### 2.2 Augmented EKF
 
-Augmented state $`z = [x;\, d] \in \mathbb{R}^{19}`$, measurement $y = Hz = x$ with
-$H = [I_{13} \mid 0]$. In this stage the full state is measured, so only $d$ is actually
-estimated.
+Augmented state $`z = [x;\, f;\, d] \in \mathbb{R}^{23}`$, measurement $`y = Hz = [x;\, f]`$ with
+$H = [I_{17} \mid 0]$. The rotor speeds come from the ESC telemetry and are handed over as
+$f = k_f \Omega^2$, as in Stage 1. In this stage the full state is measured, so only $d$ is
+actually estimated.
 
-**Predict** (continuous-discrete, with the applied input $u_k$):
+**Predict** (with the applied command $u_k$):
 
 ```math
-\hat z_{k+1|k} = \mathrm{RK4}\bigl(f_{\text{aug}}, \hat z_{k|k}, u_k, T_s\bigr), \qquad
-F_d \approx I + F_c T_s, \qquad P_{k+1|k} = F_d P_{k|k} F_d^\top + Q_{\text{aug}} T_s,
+\hat z_{k+1|k} = \Phi(\hat z_{k|k}, u_k), \qquad
+F_d = \frac{\partial \Phi}{\partial z}\Big|_{\hat z_{k|k},\, u_k}, \qquad
+P_{k+1|k} = F_d P_{k|k} F_d^\top + Q_{\text{aug}} T_s,
 ```
 
-with $F_c = \partial f_{\text{aug}}/\partial z$ from CasADi and $Q_{\text{aug}} = \mathrm{blkdiag}(Q_x, Q_d)$.
+where $\Phi$ is RK4 over $T_s$ in two substeps (as the OCP integrator), $F_d$ its exact Jacobian
+from CasADi, and $Q_{\text{aug}} = \mathrm{blkdiag}(Q_x, Q_d)$.
+
+**Why not $F_d \approx I + F_c T_s$.** The 13-state version used this first-order
+discretization. The thrust lag adds the eigenvalue $-1/\tau_m = -33\ \text{s}^{-1}$, so the
+Euler factor is $1 - T_s/\tau_m = -0.67$: the covariance of $f$ would flip sign every step,
+while the true factor is $e^{-T_s/\tau_m} = 0.19$. The Jacobian of the map that actually
+predicts the state has the right decay and is consistent with the mean prediction.
 
 **Update** (Joseph form):
 
@@ -105,17 +117,23 @@ which is nonzero only because of the cross-covariance $P_{dx}$. The prediction s
 it: $F_c$ couples $d$ into $\dot x$ (e.g. $\partial \dot v / \partial d_f = I/m$), so uncertainty
 in $d$ becomes predicted uncertainty in $x$. A *persistent* prediction error in $x$ is then
 attributed to $d$ until $\hat d$ explains it. This is the integral action that standard NMPC
-lacks. The augmented pair must be detectable for this to work; with $n_d = 6 \le n_y = 13$
+lacks. The augmented pair must be detectable for this to work; with $n_d = 6 \le n_y = 17$
 and full-state measurement, it is.
 
 **Tuning** (`get_default_ekf_tuning()`):
 
 | Block | Values | Rationale |
 |---|---|---|
-| $Q_x$ | $10^{-3}$ (position, quaternion), $10^{-2}$ (velocity, rates) | model is accurate; prevents covariance collapse |
+| $Q_x$ | $10^{-3}$ (position, quaternion), $10^{-2}$ (velocity, rates, thrusts) | model is accurate; on $f$ it covers the lag mismatch of the rotor plant |
 | $Q_d$ | $0.1$ (forces), $0.01$ (torques) | sets adaptation speed; larger → faster but noisier $\hat d$ |
-| $R$ | $10^{-3}$ (position, quaternion), $10^{-2}$ (velocity, rates) | clean full-state measurement |
+| $R$ | $10^{-3}$ (position, quaternion, thrusts), $10^{-2}$ (velocity, rates) | clean full-state measurement |
 | $P_0$ | $`0.01\, I`$ (state), $`1.0\, I`$ (disturbance) | state known, disturbance unknown |
+
+The rotor plant follows a large command step more slowly (spin-up) or faster (spin-down) than
+the model's lag ([model](quadrotor_model.md)). The thrust is measured, so $\hat f$ is corrected
+directly, but the body dynamics inside one prediction step still run on the model's thrust
+curve. During saturated maneuvers this shows up as short transients in $\hat d_\tau$
+([§5.1](#51-disturbance-estimation)).
 
 ### 2.3 Steady-state target calculator
 
@@ -157,9 +175,11 @@ u_s = M^{-1} \bigl[T_s,\; -d_{\tau_x},\; -d_{\tau_y},\; -d_{\tau_z}\bigr]^\top, 
 M = \begin{bmatrix} 1 & 1 & 1 & 1 \\ 0 & -L & 0 & L \\ -L & 0 & L & 0 \\ -c_\tau & c_\tau & -c_\tau & c_\tau \end{bmatrix},
 ```
 
-clipped to $[0, f_{\max}]$ with a warning if a limit is active.
+clipped to $[f_{\min}, f_{\max}]$ (idle and full thrust) with a warning if a limit is active.
 
 **(4) Assemble.** Position is free at equilibrium, so $`x_s = [p_{\text{ref}};\, 0;\, q_s;\, 0]`$.
+On the motor model the thrust is a state, and at rest $f = f_{\text{cmd}}$, so $u_s$ is both the
+thrust-state target $f_s$ and the command target.
 
 The OCP now has zero cost at a point the plant can actually hold, so no trade-off remains
 and the offset is removed exactly (in the nominal-estimate limit $\hat d = d$).
@@ -171,38 +191,38 @@ The OCP structure is the one from Stage 2b. Two runtime updates are added every 
 | | Stage 2b | Stage 3 |
 |---|---|---|
 | Prediction model | nominal $f(x, u)$ | $f(x, u, p)$ with $p = \hat d$ at all nodes $0 \dots N$ |
-| Reference | fixed $(x_{\text{ref}}, u_{\text{hover}})$ | $(x_s, u_s)$, recomputed from $\hat d$ every step |
-| Terminal cost | $P_{\text{lqr}}$ | $P_{\text{lqr}}$ (unchanged, $d$ does not enter the DARE) |
-| State dimension | 13 | 13 |
+| Reference $y_{\text{ref}}$ | fixed $(x_{\text{ref}}, f_{\text{hover}}, f_{\text{hover}})$ | $(x_s, f_s, f_s)$, recomputed from $\hat d$ every step |
+| Terminal cost | $P_{\text{dare}}$ | $P_{\text{dare}}$ (unchanged, $d$ does not enter the DARE) |
+| State dimension | 17 | 17 |
 
 The terminal cost keeps its role (stabilizing the error dynamics around the equilibrium); the
 offset is handled entirely through the prediction model and the moving reference. Because
-$P_{\text{lqr}}$ is computed at level hover, it is evaluated at a slightly different operating
+$P_{\text{dare}}$ is computed at level hover, it is evaluated at a slightly different operating
 point when the equilibrium is tilted, which is negligible for tilts of a few degrees.
 
 ### 2.5 Closed loop
 
 Per step $k$, in the order of `simulate_offsetfree.py`:
 
-1. **Measure** $y = x_k$ (full state).
+1. **Measure** $`y = [x_k;\, k_f \Omega_k^2]`$ (full state, rotor speeds as thrusts).
 2. **EKF update**$(y)$ → $\hat x$, $\hat d$. Runs from $t = 0$, also while offset-free is off.
 3. **Switch** at $T_{\text{activate}}$:
-   - $t \ge T_{\text{activate}}$: $(x_s, u_s) =$ `compute_ss_target`$(x_{\text{ref}}, \hat d)$, $p = \hat d$, reference $(x_s, u_s)$ → **offset-free ON**.
-   - $t < T_{\text{activate}}$: $p = 0$, reference $(x_{\text{ref}}, u_{\text{hover}})$ → **standard MPC** (Stage 2b baseline).
-4. **Solve** the OCP (`SQP_RTI`) with $x_0 = x_k$ (the measured state; $\hat x$ is not needed
+   - $t \ge T_{\text{activate}}$: $(x_s, f_s) =$ `compute_ss_target`$(x_{\text{ref}}, \hat d)$, $p = \hat d$, reference $(x_s, f_s, f_s)$ → **offset-free ON**.
+   - $t < T_{\text{activate}}$: $p = 0$, reference $(x_{\text{ref}}, f_{\text{hover}}, f_{\text{hover}})$ → **standard MPC** (Stage 2b baseline).
+4. **Solve** the OCP (`SQP_RTI`) with $x_0 = y$ (the measured state; $\hat x$ is not needed
    under full measurement).
-5. **Apply** $u_k$.
+5. **Apply** the command $u_k$, held for $T_s$.
 6. **EKF predict**$(u_k)$.
-7. **Plant step** with the true disturbance (disturbance-parameterized `AcadosSimSolver`, ERK4),
+7. **Plant step** with the true disturbance (rotor-speed `AcadosSimSolver`, 5 substeps of 10 ms),
    then quaternion normalization.
 
 ```mermaid
 flowchart TD
-    A[Measure y = x_k] --> B["EKF update(y)<br/>x_hat, d_hat"]
+    A["Measure y = [x_k; k_f Ω_k²]"] --> B["EKF update(y)<br/>x_hat, d_hat"]
     B --> C{t ≥ T_activate ?}
-    C -- "yes: offset-free" --> D["ss_target(x_ref, d_hat) → x_s, u_s<br/>p = d_hat at all nodes<br/>yref = (x_s, u_s)"]
-    C -- "no: standard MPC" --> E["p = 0<br/>yref = (x_ref, u_hover)"]
-    D --> F["Solve OCP (SQP_RTI)<br/>x0 = x_k"]
+    C -- "yes: offset-free" --> D["ss_target(x_ref, d_hat) → x_s, f_s<br/>p = d_hat at all nodes<br/>yref = (x_s, f_s, f_s)"]
+    C -- "no: standard MPC" --> E["p = 0<br/>yref = (x_ref, f_hover, f_hover)"]
+    D --> F["Solve OCP (SQP_RTI)<br/>x0 = y"]
     E --> F
     F --> G[Apply u_k]
     G --> H["EKF predict(u_k)"]
@@ -216,18 +236,27 @@ flowchart TD
 
 | Item | Setting |
 |---|---|
-| Stage cost, $Q$, $R$, bounds | identical to Stages 1–2 |
-| Terminal cost | $W_e = P_{\text{lqr}}$, reduced-order DARE |
+| Stage cost $Q$, $Q_f$, $R$, bounds $[f_{\min}, f_{\max}]$ | identical to Stages 1–2 (imported from Stage 1) |
+| Terminal cost | $W_e = P_{\text{dare}}$, 16-state DARE with $T_s$-scaled weights |
 | Parameters | `model.p` $= d \in \mathbb{R}^6$, default $0$ |
-| Horizon, solver | $N = 20$, $T = 1$ s, $T_s = 0.05$ s, `SQP_RTI`, ERK4, Gauss-Newton, HPIPM |
-| EKF | RK4 prediction, $F_d = I + F_c T_s$, Joseph update, tuning as in [§2.2](#22-augmented-ekf) |
-| Target calculator | closed form, motor clipping with warning |
-| Activation | $T_{\text{activate}} = 4$ s |
+| Horizon, solver | $N = 20$, $T = 1$ s, $T_s = 0.05$ s, `SQP_RTI`, ERK4 (2 steps), Gauss-Newton, HPIPM |
+| EKF | RK4 prediction (2 substeps), exact discrete Jacobian, Joseph update, tuning as in [§2.2](#22-augmented-ekf) |
+| Target calculator | closed form, motor clipping to $[f_{\min}, f_{\max}]$ with warning |
+| Activation | $T_{\text{activate}} = 5$ s (two equal phases of 5 s) |
+
+```bash
+./run.sh stage3_offsetfree/simulate_offsetfree.py   # → results/stage3_offsetfree/
+```
+
+The 13-state version from its tag:
 
 ```bash
 git checkout stage3
 ./run.sh simulate_offsetfree.py   # → results/stage3_offsetfree/
 ```
+
+Stage 4 has not been migrated yet. Until it is, it uses `create_rigid_body_solver()` from the
+same module: the pre-migration Stage 3 solver, unchanged.
 
 ## 4. Scenario
 
@@ -241,9 +270,10 @@ A constant disturbance acts on the plant from $t = 0$:
 | $d_{f_z}$ | $-3 \times 0.981 = -2.943$ N ($`\approx 30\%`$ mass error) |
 | $d_\tau$ | $0$ |
 
-The run is split into two phases. For $t < 4$ s, standard MPC flies the maneuver and shows the
-offset, while the EKF already estimates $\hat d$ in the background. At $t = 4$ s offset-free
-control is switched on. Because the disturbance is present from the start, the demonstration
+The run is split into two phases. For $t < 5$ s, standard MPC flies the maneuver and shows the
+offset, while the EKF already estimates $\hat d$ in the background. At $t = 5$ s offset-free
+control is switched on. (The 13-state version switched at 4 s; the offset was still creeping
+by a few tenths of a millimetre then, and two equal halves read more easily.) Because the disturbance is present from the start, the demonstration
 isolates the *correction mechanism*; detection delay after a disturbance onset is not tested.
 
 **Expected equilibrium** ([§2.3](#23-steady-state-target-calculator) evaluated for this disturbance, $m = 1$ kg, $\psi = 0$):
@@ -261,54 +291,73 @@ isolates the *correction mechanism*; detection delay after a disturbance onset i
 
 ![EKF disturbance estimation](../results/stage3_offsetfree/disturbance.png)
 
-Starting from $\hat d = 0$, the force estimates converge within about $1\text{–}1.5$ s:
-$\hat d_{f_x}$ reaches $`95\%`$ of its true value after $1.0$ s, $\hat d_{f_z}$ converges in about
-$1$ s, and $\hat d_{f_y}$ settles by about $1.5$ s after a small undershoot to $-0.31$ N. All of
-this happens well before $T_{\text{activate}}$, so the activation transient at $t = 4$ s is
-caused by the controller, not by the estimator. Over the last second of the run all six
-estimation errors are zero to the printed precision ($< 5 \cdot 10^{-5}$ N and N·m).
+Starting from $\hat d = 0$, the force estimates stay within $`5\%`$ of their true values from
+$1.15$ s ($\hat d_{f_z}$), $1.7$ s ($\hat d_{f_y}$) and $1.85$ s ($\hat d_{f_x}$) on. On the way
+$\hat d_{f_z}$ undershoots to $-3.27$ N and $\hat d_{f_y}$ to $-0.37$ N. All of this happens well
+before $T_{\text{activate}}$, so the activation transient at $t = 5$ s is caused by the
+controller, not by the estimator. Over the last second of the run all six estimation errors
+are below $2 \cdot 10^{-6}$ (N and N·m).
 
-The torque estimates show transients of order $10^{-5}$ to $10^{-4}$ N·m during the
-aggressive first second, then decay to zero, which is correct since no torque disturbance
-is injected. They appear while the force estimates are still wrong: the force error shows up
-in the innovation, and part of it leaks into $\hat d_\tau$ through the cross-covariances
-built up during the large attitude maneuver.
+The torque estimates show short transients during the first half second, up to $0.07$ N·m in
+$\hat d_{\tau_y}$, and small bumps ($< 0.006$ N·m) at activation; no torque disturbance is
+injected. They come from the **motor-lag mismatch** ([§2.2](#22-augmented-ekf)): in the first
+$0.4$ s the commands jump between idle and full thrust, the rotor plant spins up more slowly
+than the model's lag, and the thrust inside a prediction step is wrong by up to $0.5$ N per
+rotor. A replay of the same commands through a plant equal to the EKF's model confirms it:
+
+| | $\max\lvert\hat d_\tau\rvert$ [N·m] | $\min \hat d_{f_z}$ [N] |
+|---|---|---|
+| rotor plant (closed loop) | $0.039,\ 0.070,\ 0.0016$ | $-3.27$ |
+| plant = EKF model | $0.0003,\ 0.0008,\ 0.00006$ | $-2.94$ |
+
+The mismatch is real (the hardware has it too) and harmless here: it lasts only while the
+commands saturate, and $\hat d$ is clean long before it is used.
 
 ### 5.2 States
 
 ![State trajectory](../results/stage3_offsetfree/states.png)
 
-**Phase 1, standard MPC ($t < 4$ s).** The step is twice the size of Stage 1, so the transient
-is more aggressive (pitch $+30° \to -34°$, $v_z$ up to $4.4$ m/s). The loop then settles at a
-steady state that is not the reference:
+**Phase 1, standard MPC ($t < 5$ s).** The step is twice the size of Stage 1, so the transient
+is more aggressive (pitch $+26° \to -29°$, roll $-15° \to +11°$, $v_z$ up to $4.4$ m/s), and the
+commands touch both bounds until $t = 0.4$ s. The loop then settles at a steady state that is
+not the reference:
 
 | Position error | $\Delta p_x$ | $\Delta p_y$ | $\Delta p_z$ |
 |---|---|---|---|
-| standard MPC (mean over $t = 3\text{–}4$ s) | $+58.1$ mm | $-35.9$ mm | $-78.5$ mm |
-| offset-free (mean over last 1 s) | $< 0.05$ mm | $< 0.05$ mm | $< 0.05$ mm |
+| standard MPC (mean over $t = 4\text{–}5$ s) | $+70.5$ mm | $-42.5$ mm | $-97.5$ mm |
+| offset-free (mean over last 1 s) | $< 0.005$ mm | $< 0.005$ mm | $< 0.005$ mm |
 
 Each offset points in the direction the disturbance pushes: downwind in $x$ and $y$, and
-downward under the extra weight. Roll and pitch already sit at about $-1.3°$ and $-2.2°$,
-which is the equilibrium tilt of [§4](#4-scenario), while the reference still asks for $0°$. This is exactly
+downward under the extra weight. Roll and pitch already sit at $-1.35°$ and $-2.25°$,
+which is the equilibrium tilt of [§4](#4-scenario) to within $0.01°$, while the reference still asks for $0°$. This is exactly
 the structure predicted in [§1](#1-motivation): physics forces the correct attitude, and the position error is
 what the nominal controller needs to keep commanding it.
 
-**Phase 2, offset-free ON ($t \ge 4$ s).** The attitude reference (green dashed, `eq. target`)
-jumps to $(x_s, u_s)$ and $\hat d$ enters the prediction model. Position moves back onto the
-reference within about $1$ s, with small velocity bumps ($|v| \lesssim 0.15$ m/s) and a short
-attitude dip (pitch to about $-4°$) that provides the corrective acceleration. Afterwards
-position, velocity and rates sit on their references, and roll/pitch sit exactly on the
-equilibrium target.
+The offsets are about 20 % larger than on the 13-state model (tag `rigid-body`: $58 / -36 / -79$ mm,
+averaged over 3–4 s).
+The stage cost now also penalizes the thrust *state* away from hover ($Q_f$), so the
+nominal controller resists the required extra thrust more and pays for it with position.
+
+**Phase 2, offset-free ON ($t \ge 5$ s).** The attitude reference (green dashed, `eq. target`)
+jumps to $(x_s, f_s)$ and $\hat d$ enters the prediction model. Position is back within 1 cm of
+the reference at $t = 6.05$ s and within 1 mm at $6.85$ s, with small velocity bumps
+($|v| \le 0.21$ m/s, in $v_z$) and a short attitude dip (pitch to $-4.0°$) that provides the
+corrective acceleration. Afterwards position, velocity and rates sit on their references, and
+roll/pitch sit exactly on the equilibrium target.
 
 ### 5.3 Inputs
 
 ![Input trajectory](../results/stage3_offsetfree/inputs.png)
 
-In phase 1 total thrust settles at about $12.8$ N, already close to $T_s$: the plant needs
-that thrust to hover regardless of the reference. At activation, thrust briefly rises to
-about $15.7$ N to lift the drone the missing $7.9$ cm, dips slightly, and settles at
-$12.77$ N with all four motors at $3.19$ N, matching the analytical $T_s$ and $u_s$ of [§4](#4-scenario).
-The motors stay equal because no torque disturbance is present.
+Thin steps are the commands $f_{\text{cmd}}$, thick lines the rotor thrust $k_f \Omega^2$, which
+lags behind every step by the speed loop. In the first $0.4$ s the take-off saturates the motors
+(total rotor thrust up to $29.2$ N, then down to idle on single rotors to stop the climb). In
+phase 1 total thrust settles at about $12.8$ N, already close to $T_s$: the plant needs that
+thrust to hover regardless of the reference. At activation the command total briefly rises to
+$17.5$ N, the rotors deliver $16.5$ N of it before the command drops again, and the drone climbs
+the missing $9.8$ cm. Thrust then settles at $12.77$ N with all four motors at $3.19$ N,
+matching the analytical $T_s$ and $u_s$ of [§4](#4-scenario). The motors stay equal because no
+torque disturbance is present.
 
 ### 5.4 Flight path
 
@@ -330,7 +379,11 @@ activation.
   target calculator, which replaces the unreachable reference with the reachable equilibrium,
   makes the offset exactly zero.
 - **The structure keeps the OCP unchanged.** $d$ enters as a parameter, the state dimension
-  stays 13, and the DARE terminal cost is reused.
+  stays 17, and the DARE terminal cost is reused.
+- **Fast states need a proper discretization in the estimator.** The thrust lag is faster than
+  $T_s$; the EKF propagates its covariance with the exact Jacobian of the discrete prediction,
+  not with $I + F_c T_s$. The remaining plant–model lag mismatch is visible only as short
+  $\hat d_\tau$ transients while the motors saturate.
 - **Limitation.** This stage assumes the full state is measured, so the EKF only has to
   estimate $d$. A real drone does not measure velocity directly. Stage 4 removes that
   assumption, measures only $`y = [p;\, q;\, \omega]`$, and compares two estimators for the

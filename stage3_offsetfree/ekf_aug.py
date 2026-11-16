@@ -1,79 +1,110 @@
 """
-ekf_aug.py — Stage 3 Augmented EKF (Full-State Measurement)
-===========================================================
-Estimates the augmented state z = [x(13); d(6)] ∈ R^19 where:
-    x = quadrotor state (fully measured)
-    d = [d_fx, d_fy, d_fz, d_tx, d_ty, d_tz] constant disturbance
+ekf_aug.py — Stage 3 Augmented EKF (Full-State Measurement, Motor Dynamics)
+===========================================================================
+Estimates the augmented state z = [x(13); f(4); d(6)] ∈ R^23 where:
+    x = rigid-body state                        (measured)
+    f = rotor thrusts f = k_f Ω²                 (measured: ESC rpm telemetry)
+    d = [d_fx, d_fy, d_fz, d_tx, d_ty, d_tz]     constant disturbance
+
+Prediction model: the MPC's thrust-lag model with d as extra states,
+    [ẋ; ḟ] = [f(x, f, d); (f_cmd − f)/τ_m],     ḋ = 0.
 
 Measurement model:
-    y = H @ z = x      (full state access, H = [I_13 | 0_13×6])
+    y = H @ z = [x; f]      (full state access, H = [I_17 | 0_17×6])
 
-Since x is directly measured, the EKF innovation primarily corrects
+Since [x; f] is directly measured, the EKF innovation primarily corrects
 the disturbance estimate d̂ via the cross-covariance P_xd.
 This is the mechanism that gives offset-free MPC its integral action.
 
-Algorithm (continuous-discrete EKF):
-    Predict:  integrate z_dot = f_aug(z, u) with RK4 over Ts
-              propagate P via F_d = I + F_c·Ts  (first-order discretization)
+Algorithm (discrete EKF on the integrated model):
+    Predict:  z⁺ = Φ(z, u)  — RK4 over Ts in N_RK4 substeps (τ_m < Ts)
+              F_d = ∂Φ/∂z   — exact Jacobian of that discrete map (CasADi)
+              P⁺  = F_d P F_dᵀ + Q_aug·Ts
     Update:   K = P H^T (H P H^T + R)^{-1}
               z_hat += K (y - H z_hat)
               P = (I - K H) P (I - K H)^T + K R K^T   (Joseph form)
 
+Why the exact discrete Jacobian: the 13-state version used F_d ≈ I + F_c·Ts.
+The thrust lag has the eigenvalue −1/τ_m = −33 s⁻¹, so the Euler factor
+1 − Ts/τ_m = −0.67 would flip the sign of the thrust covariance every step,
+while the true factor is e^{−Ts/τ_m} = 0.19. ∂Φ/∂z is the linearization of
+exactly the map the state prediction uses, so it carries the correct decay.
+
 Tuning guide:
-    Q_d (ND×ND):  disturbance process noise — controls adaptation speed
-        Large Q_d  → fast adaptation, noisy d̂ estimate
-        Small Q_d  → slow adaptation, smooth d̂ estimate
-        Typical: Q_d = diag([0.1, 0.1, 0.1, 0.01, 0.01, 0.01])
-                 (forces change faster than torques in practice)
-
-    Q_x (NX×NX):  state process noise — covers model imperfections
-        Typically small since the model is accurate
-        Typical: Q_x = diag(small values)
-
-    R (NX×NX):    measurement noise covariance
-        Stage 3 assumes clean full-state access → small R
-        Typical: R = diag([σ_pos², σ_vel², σ_quat², σ_omega²])
+    Q_d (ND):    disturbance process noise — controls adaptation speed
+    Q_x (NXM):   state process noise — covers model imperfections; on f it
+                 covers the lag mismatch of the rotor plant (factor
+                 2Ω/(ω_cmd+Ω) ≠ 1 for large steps, see quadrotor_model)
+    R   (NXM):   measurement noise covariance (clean full-state access)
 
 Relation to Stage 4a (state_est_ekf.py):
-    Same augmented dynamics (quadrotor_model.get_augmented_dynamics) and
-    the same predict/update algorithm, but y = x (13) instead of the partial
-    y = [p; q; ω] (10). Kept separate so the Stage 3 results stay reproducible.
+    Stage 4a measures only y = [p; q; ω] and has not been migrated to the
+    motor model yet (13-state augmented dynamics, Euler covariance step).
 """
 
 import numpy as np
+import casadi as ca
+
 from core.quadrotor_model import (
-    NX, NU, ND, NZ,
-    get_augmented_dynamics,
+    NXM, NU, ND,
+    create_thrust_lag_disturbance_model, thrust_lag_hover_point,
     quat_normalize,
 )
+
+NZM    = NXM + ND   # 23 — augmented state [x; f; d]
+N_RK4  = 2          # RK4 substeps per Ts, as sim_method_num_steps of the OCP
+
+
+# ─────────────────────────────────────────────────────────────────
+# Discrete augmented dynamics  Φ(z, u)  and  ∂Φ/∂z
+# ─────────────────────────────────────────────────────────────────
+def get_augmented_step(Ts: float, n_steps: int = N_RK4):
+    """
+    CasADi functions of one prediction step of the augmented model:
+
+        Phi(z, u)  = [RK4ⁿ(x, u; d); d]      (23,)
+        F_d(z, u)  = ∂Phi/∂z                  (23×23)
+
+    The disturbance enters the thrust-lag model as the parameter p; here it
+    is the last ND entries of z and stays constant over the step.
+    """
+    model = create_thrust_lag_disturbance_model()
+    f = ca.Function('f_tl', [model.x, model.u, model.p], [model.f_expl_expr])
+
+    z = ca.SX.sym('z', NZM)
+    u = ca.SX.sym('u', NU)
+    x, d = z[:NXM], z[NXM:]
+
+    h = Ts / n_steps
+    for _ in range(n_steps):
+        k1 = f(x,              u, d)
+        k2 = f(x + h / 2 * k1, u, d)
+        k3 = f(x + h / 2 * k2, u, d)
+        k4 = f(x + h * k3,     u, d)
+        x = x + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
+
+    z_next = ca.vertcat(x, d)
+    Phi = ca.Function('Phi_aug', [z, u], [z_next], ['z', 'u'], ['z_next'])
+    F_d = ca.Function('F_d_aug', [z, u], [ca.jacobian(z_next, z)], ['z', 'u'], ['F_d'])
+    return Phi, F_d
 
 
 class AugEKF:
     """
-    Extended Kalman Filter on the augmented quadrotor system.
+    Extended Kalman Filter on the augmented motor-dynamics model.
 
-    State: z = [x(13); d(6)] ∈ R^19
-    Measurement: y = x ∈ R^13 (full state access)
+    State: z = [x(13); f(4); d(6)] ∈ R^23
+    Measurement: y = [x; f] ∈ R^17 (full state access)
 
     Usage in closed-loop:
         ekf = AugEKF(Ts=0.05, Q_x=..., Q_d=..., R=...)
 
         for each MPC step:
-            # 1. Get measurement
-            y = x_measured
-
-            # 2. EKF update (correct d̂ using measurement)
-            ekf.update(y)
-
-            # 3. Extract estimates for MPC
-            x_hat = ekf.get_state()       # (13,)
-            d_hat = ekf.get_disturbance() # (6,)
-
-            # 4. Solve MPC with d_hat as parameter
-            ...
-
-            # 5. EKF predict (propagate z_hat, P forward using applied u)
-            ekf.predict(u_applied)
+            ekf.update(y)                   # 1. correct with the measurement
+            x_hat = ekf.get_state()         # 2. (17,)
+            d_hat = ekf.get_disturbance()   #    (6,)
+            ...                             # 3. solve MPC with d_hat
+            ekf.predict(u_applied)          # 4. propagate with the command
     """
 
     def __init__(self, Ts: float,
@@ -81,119 +112,63 @@ class AugEKF:
                  x0: np.ndarray = None, d0: np.ndarray = None,
                  P0: np.ndarray = None):
         """
-        Initialize the AugEKF.
-
         Args:
             Ts:   sample time [s]
-            Q_x:  (NX,) or (NX,NX) state process noise
+            Q_x:  (NXM,) or (NXM,NXM) state process noise
             Q_d:  (ND,) or (ND,ND) disturbance process noise
-            R:    (NX,) or (NX,NX) measurement noise covariance
-            x0:   (NX,) initial state estimate (default: hover)
+            R:    (NXM,) or (NXM,NXM) measurement noise covariance
+            x0:   (NXM,) initial state estimate (default: hover)
             d0:   (ND,) initial disturbance estimate (default: zeros)
-            P0:   (NZ,NZ) initial covariance (default: block-diagonal)
+            P0:   (NZM,NZM) initial covariance (default: block-diagonal)
         """
         self.Ts = Ts
 
-        # ── Process noise Q_aug = blkdiag(Q_x, Q_d) ───────────
-        if Q_x.ndim == 1:
-            Q_x = np.diag(Q_x)
-        if Q_d.ndim == 1:
-            Q_d = np.diag(Q_d)
+        Q_x = np.diag(Q_x) if np.ndim(Q_x) == 1 else Q_x
+        Q_d = np.diag(Q_d) if np.ndim(Q_d) == 1 else Q_d
+        R   = np.diag(R)   if np.ndim(R)   == 1 else R
         self.Q_aug = np.block([
-            [Q_x,                np.zeros((NX, ND))],
-            [np.zeros((ND, NX)), Q_d                ],
+            [Q_x,                 np.zeros((NXM, ND))],
+            [np.zeros((ND, NXM)), Q_d                ],
         ])
-
-        # ── Measurement noise R ────────────────────────────────
-        if R.ndim == 1:
-            R = np.diag(R)
         self.R = R
 
-        # ── Measurement matrix H = [I_13 | 0_13×6] ───────────
-        self.H = np.hstack([np.eye(NX), np.zeros((NX, ND))])
+        # ── Measurement matrix H = [I_17 | 0_17×6] ────────────
+        self.H = np.hstack([np.eye(NXM), np.zeros((NXM, ND))])
 
         # ── Initial augmented state ────────────────────────────
         if x0 is None:
-            x0 = np.zeros(NX)
-            x0[6] = 1.0   # qw = 1 (hover quaternion)
+            x0, _ = thrust_lag_hover_point()
         if d0 is None:
             d0 = np.zeros(ND)
-
         self.z_hat = np.concatenate([x0, d0])
 
-        # ── Initial covariance ─────────────────────────────────
+        # ── Initial covariance: state known, disturbance unknown ─
         if P0 is not None:
             self.P = P0.copy()
         else:
-            # Default: confident on state, uncertain on disturbance
-            P_x = 0.01 * np.eye(NX)        # small — state is measured
-            P_d = 1.0  * np.eye(ND)         # large — d is unknown
             self.P = np.block([
-                [P_x,                np.zeros((NX, ND))],
-                [np.zeros((ND, NX)), P_d                ],
+                [0.01 * np.eye(NXM),  np.zeros((NXM, ND))],
+                [np.zeros((ND, NXM)), 1.0 * np.eye(ND)   ],
             ])
 
-        # ── CasADi dynamics and Jacobian ───────────────────────
-        self.f_aug, self.F_func = get_augmented_dynamics()
-
-        # ── RK4 integration buffers ────────────────────────────
-        # (avoid repeated allocation)
-        self._k1 = np.zeros(NZ)
-        self._k2 = np.zeros(NZ)
-        self._k3 = np.zeros(NZ)
-        self._k4 = np.zeros(NZ)
-
-    # ─────────────────────────────────────────────────────────────
-    # RK4 integration of augmented dynamics
-    # ─────────────────────────────────────────────────────────────
-    def _rk4_predict(self, z: np.ndarray, u: np.ndarray) -> np.ndarray:
-        """
-        Integrate z_dot = f_aug(z, u) over one sample time Ts using RK4.
-
-        The disturbance states d have d_dot=0, so RK4 leaves them unchanged.
-        The RK4 is for the nonlinear plant states x.
-        """
-        dt = self.Ts
-        f = self.f_aug
-
-        k1 = np.array(f(z,              u)).flatten()
-        k2 = np.array(f(z + dt/2 * k1,  u)).flatten()
-        k3 = np.array(f(z + dt/2 * k2,  u)).flatten()
-        k4 = np.array(f(z + dt   * k3,  u)).flatten()
-
-        z_next = z + dt / 6.0 * (k1 + 2*k2 + 2*k3 + k4)
-        return z_next
+        # ── CasADi discrete step and its Jacobian ──────────────
+        self.Phi, self.F_d = get_augmented_step(Ts)
 
     # ─────────────────────────────────────────────────────────────
     # Prediction step
     # ─────────────────────────────────────────────────────────────
     def predict(self, u: np.ndarray):
         """
-        EKF prediction step: propagate state and covariance forward.
+        Propagate state and covariance over one Ts with the applied command u.
 
-        Called AFTER MPC solves (using the applied control input).
-
-        State:      z_hat(k+1|k) = RK4_integrate(f_aug, z_hat(k|k), u(k))
-        Covariance: P(k+1|k) = F_d P(k|k) F_d^T + Q_aug
-
-        where F_d ≈ I + F_c·Ts  (first-order discretization of Jacobian)
+        State:      z(k+1|k) = Φ(z(k|k), u(k))
+        Covariance: P(k+1|k) = F_d P(k|k) F_d^T + Q_aug·Ts,  F_d = ∂Φ/∂z at z(k|k)
         """
-        # ── State prediction (RK4) ─────────────────────────────
-        self.z_hat = self._rk4_predict(self.z_hat, u)
-
-        # Normalize quaternion in the state part
-        self.z_hat[:NX] = quat_normalize(self.z_hat[:NX].copy())
-
-        # ── Covariance prediction ──────────────────────────────
-        # Continuous Jacobian at current estimate
-        F_c = np.array(self.F_func(self.z_hat, u))
-
-        # First-order discretization: F_d ≈ I + F_c·Ts
-        F_d = np.eye(NZ) + F_c * self.Ts
+        F_d = np.array(self.F_d(self.z_hat, u))
+        self.z_hat = np.array(self.Phi(self.z_hat, u)).flatten()
+        quat_normalize(self.z_hat)
 
         self.P = F_d @ self.P @ F_d.T + self.Q_aug * self.Ts
-
-        # Symmetrize (numerical hygiene)
         self.P = 0.5 * (self.P + self.P.T)
 
     # ─────────────────────────────────────────────────────────────
@@ -201,120 +176,74 @@ class AugEKF:
     # ─────────────────────────────────────────────────────────────
     def update(self, y: np.ndarray):
         """
-        EKF update step: correct state estimate using measurement.
+        Correct the estimate with the measurement y = [x; f] (17,).
 
-        Called BEFORE MPC solves (incorporating the latest measurement).
-
-        Measurement model: y = H @ z = x  (full state access)
-
-        Innovation:  e = y - H @ z_hat
-        Kalman gain: K = P H^T (H P H^T + R)^{-1}
-        Correction:  z_hat += K @ e
-        Covariance:  Joseph form for numerical stability
-
-        The key mechanism: even though x is measured directly,
-        the Kalman gain K has nonzero entries for the d-states
-        (rows 13-18) because P_xd ≠ 0. This is how d̂ adapts.
+        Even though [x; f] is measured directly, the Kalman gain has nonzero
+        rows for d (the last 6) because P_xd ≠ 0. This is how d̂ adapts.
         """
-        H = self.H
-        P = self.P
-        R = self.R
+        H, P, R = self.H, self.P, self.R
 
-        # ── Innovation ─────────────────────────────────────────
-        y_hat = H @ self.z_hat          # predicted measurement (= x̂)
-        e = y - y_hat                    # innovation (13,)
-
-        # Handle quaternion sign ambiguity in innovation:
-        # If qw_meas and qw_hat have opposite signs, flip the measurement
-        # quaternion to avoid a large spurious innovation
+        # Quaternion double cover: flip the measured q into the estimate's hemisphere
         if y[6] * self.z_hat[6] < 0:
-            y_flipped = y.copy()
-            y_flipped[6:10] *= -1
-            e = y_flipped - y_hat
+            y = y.copy()
+            y[6:10] *= -1
+        e = y - H @ self.z_hat
 
-        # ── Kalman gain ────────────────────────────────────────
-        S = H @ P @ H.T + R             # innovation covariance (13×13)
-        K = P @ H.T @ np.linalg.inv(S)  # Kalman gain (19×13)
+        S = H @ P @ H.T + R
+        K = P @ H.T @ np.linalg.inv(S)
 
-        # ── State correction ───────────────────────────────────
         self.z_hat = self.z_hat + K @ e
+        quat_normalize(self.z_hat)
 
-        # Normalize quaternion after correction
-        self.z_hat[:NX] = quat_normalize(self.z_hat[:NX].copy())
-
-        # ── Covariance update (Joseph form) ────────────────────
-        # P = (I-KH) P (I-KH)^T + K R K^T
-        # More numerically stable than P = (I-KH)P
-        I_KH = np.eye(NZ) - K @ H
+        I_KH = np.eye(NZM) - K @ H
         self.P = I_KH @ P @ I_KH.T + K @ R @ K.T
-
-        # Symmetrize
         self.P = 0.5 * (self.P + self.P.T)
 
     # ─────────────────────────────────────────────────────────────
     # Accessors
     # ─────────────────────────────────────────────────────────────
     def get_state(self) -> np.ndarray:
-        """Return the estimated plant state x̂ (13,)."""
-        return self.z_hat[:NX].copy()
+        """Estimated MPC state [x̂; f̂] (17,)."""
+        return self.z_hat[:NXM].copy()
 
     def get_disturbance(self) -> np.ndarray:
-        """Return the estimated disturbance d̂ (6,)."""
-        return self.z_hat[NX:].copy()
-
-    def get_augmented_state(self) -> np.ndarray:
-        """Return the full augmented state ẑ = [x̂; d̂] (19,)."""
-        return self.z_hat.copy()
+        """Estimated disturbance d̂ (6,)."""
+        return self.z_hat[NXM:].copy()
 
     def get_covariance(self) -> np.ndarray:
-        """Return the augmented covariance P (19×19)."""
+        """Augmented covariance P (23×23)."""
         return self.P.copy()
-
-    def get_disturbance_covariance(self) -> np.ndarray:
-        """Return the disturbance sub-block of P (6×6)."""
-        return self.P[NX:, NX:].copy()
 
 
 # ─────────────────────────────────────────────────────────────────
-# Default tuning (good starting point for the quadrotor)
+# Default tuning
 # ─────────────────────────────────────────────────────────────────
 def get_default_ekf_tuning():
     """
-    Return default Q_x, Q_d, R matrices for the quadrotor EKF.
+    Default Q_x, Q_d, R for the motor-dynamics EKF.
 
-    Design rationale:
-        Q_x:  small — the model is accurate, process noise just
-               prevents covariance collapse
-        Q_d:  moderate — allows d̂ to track step disturbances
-               within ~1-2 seconds (roughly 20-40 MPC steps at 50ms)
-               Forces (d_f) change faster in practice than torques (d_τ),
-               so Q_d_force > Q_d_torque
-        R:    small — full state access with good sensors
-               Position and orientation are more precisely measured
-               than velocities and angular rates
+    Body states as in the 13-state version. Thrust states:
+        Q_f = 0.01 N²/s  — the rotor plant's lag differs from ḟ = (f_cmd − f)/τ_m
+                           for large steps; this lets the measured f correct f̂
+                           instead of pushing the mismatch into d̂
+        R_f = 0.001 N²   — rpm telemetry, f = k_f Ω²
     """
-    # State process noise Q_x (13,)
     Q_x = np.array([
         0.001, 0.001, 0.001,           # position [m²/s]
         0.01,  0.01,  0.01,            # velocity [m²/s³]
         0.001, 0.001, 0.001, 0.001,    # quaternion [-]
         0.01,  0.01,  0.01,            # angular rates [rad²/s³]
+        0.01,  0.01,  0.01,  0.01,     # thrusts [N²/s]
     ])
-
-    # Disturbance process noise Q_d (6,)
-    # Controls adaptation speed:
-    #   τ_adapt ≈ √(R / Q_d)  (rough rule of thumb)
     Q_d = np.array([
-        0.1,  0.1,  0.1,              # force disturbance [N²/s]
-        0.01, 0.01, 0.01,             # torque disturbance [N²m²/s]
+        0.1,  0.1,  0.1,               # force disturbance [N²/s]
+        0.01, 0.01, 0.01,              # torque disturbance [N²m²/s]
     ])
-
-    # Measurement noise R (13,)
     R = np.array([
         0.001, 0.001, 0.001,           # position [m²]
         0.01,  0.01,  0.01,            # velocity [m²/s²]
         0.001, 0.001, 0.001, 0.001,    # quaternion [-]
         0.01,  0.01,  0.01,            # angular rates [rad²/s²]
+        0.001, 0.001, 0.001, 0.001,    # thrusts [N²]
     ])
-
     return Q_x, Q_d, R
