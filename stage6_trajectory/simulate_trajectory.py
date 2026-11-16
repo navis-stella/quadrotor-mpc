@@ -36,7 +36,7 @@ Imports:
     reference_flatness.py     → flat_to_state_input  (→ x_r, u_r under d̂)
     ocp_config_trajectory.py  → create_solver() + runtime helpers
     state_est_mhe.py          → MovingHorizonEstimator  (Stage 4b)
-    closed_loop_sim_config.py → OMEGA_MPC  (Stage 4 value)
+    stage4 closed_loop.py     → OMEGA_MPC  (Stage 4 value)
 
 Run:  python -m stage6_trajectory.simulate_trajectory [--nominal]
       → results/stage6_trajectory/ (nominal: results/stage6_trajectory/nominal/)
@@ -54,7 +54,7 @@ from core.quadrotor_model                      import (create_disturbance_plant,
 from stage6_trajectory.reference_generate      import HelixReference
 from stage6_trajectory.reference_flatness      import flat_to_state_input
 import stage6_trajectory.ocp_config_trajectory as traj
-from stage4_estimation.closed_loop_sim_config  import OMEGA_MPC
+from stage4_estimation.closed_loop             import OMEGA_MPC
 from core.sensor_simulator                     import SensorSimulator, MOCAP_NOISE_STD
 from stage4_estimation.state_est_mhe           import MovingHorizonEstimator
 from core.plot_utils                           import (plot_states, plot_inputs, plot_3d_trajectory,
@@ -109,7 +109,8 @@ def simulate(nominal: bool = False, sensor_seed: int = 42) -> dict:
         sensor = SensorSimulator(noise_std=MOCAP_NOISE_STD, seed=sensor_seed)
         y      = sensor.measure(x0)
         print('Building MHE (certificate data/mhe_params.npz)...')
-        est    = MovingHorizonEstimator(Ts=TS, z0=project_measurement(y))
+        est    = MovingHorizonEstimator(Ts=TS, z0=project_measurement(y),
+                                        model='rigid')   # 13-state until Stage 6 migrates
 
     ref0 = flat_to_state_input(REF.horizon(0.0, N, TS))
     traj.init_guess(solver, ref0.x_r, ref0.u_r, N)

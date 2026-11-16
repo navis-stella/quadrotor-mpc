@@ -2,11 +2,16 @@
 
 | | |
 |---|---|
-| Git tag | `stage4` |
-| Files | `detectability_check.py` (offline), `ocp_config_mhe.py`, `state_est_mhe.py`, `simulate_mhe.py`, `simulate_compare.py` (+ shared loop `closed_loop_sim_config.py`) |
-| Estimator | moving horizon estimator on $`z = [x;\, d] \in \mathbb{R}^{19}`$, weights from an i-iIOSS (LMI) certificate |
+| Git tag | `stage4` (13-state model; tag `rigid-body` = all stages before the motor dynamics) |
+| Files | `stage4_estimation/` `detectability_check.py` (offline), `ocp_config_mhe.py`, `state_est_mhe.py`, `simulate_mhe.py`, `simulate_compare.py` (+ shared loop `closed_loop.py`) |
+| Model | motor dynamics: estimator state $[x;\, f;\, d]$, thrust commands as known input, rotor-speed plant ([model](quadrotor_model.md)) |
+| Estimator | moving horizon estimator on $`z = [x;\, f;\, d] \in \mathbb{R}^{23}`$, weights from an i-iIOSS (LMI) certificate |
 | Certificate | `data/mhe_params.npz` — $P$, $Q$, $R$, $\lambda$, $T_{\min}$, envelope |
 | Results | `results/stage4b_mhe/`, `results/stage4_compare/` |
+
+> **Stage 6 still uses the 13-state MHE.** Until Stage 6 moves to the motor model, the MHE
+> classes keep a `model='rigid'` path that runs on the frozen 13-state certificate
+> `data/mhe_params_rigid.npz`. Everything in this document is the motor-model version.
 
 Main references:
 J. D. Schiller, S. Muntwiler, J. Köhler, M. N. Zeilinger, M. A. Müller, *A Lyapunov function
@@ -104,40 +109,64 @@ is required.
 The certificate is computed for exactly the model the MHE optimizes over:
 
 ```math
-\dot z = \begin{bmatrix} f(x, u, d) \\ 0 \end{bmatrix} + w, \quad z \in \mathbb{R}^{19}, \quad
-w \in \mathbb{R}^{19}, \qquad y = Cz = [p;\, q;\, \omega].
+\dot z = \begin{bmatrix} f(x, f, d) \\ (u - f)/\tau_m \\ 0 \end{bmatrix} + w, \quad z \in \mathbb{R}^{23}, \quad
+w \in \mathbb{R}^{23}, \qquad y = Cz = [p;\, q;\, \omega],
 ```
 
+with the thrust commands $u$ as known input. The rotor thrusts $f$ are states and not measured.
 The structure of $A = \partial f / \partial z$ decides what has to be covered. The script asserts
-each property symbolically before solving:
+each property before solving:
 
 | Variable | Enters $A$? | Set used |
 |---|---|---|
-| $p$, $v$, $d$, $w$ | no | unbounded |
-| $q$ | yes, affinely | ball $\Vert q\Vert \le r_{\max} = 1.02$ (the unit sphere is not convex; the ball is its convex hull, with margin for norm drift of the estimate) |
+| $p$, $v$, $d$, $u$, $w$ | no | unbounded |
+| $q$ | yes: affinely, except through the thrust direction $r(q) = R(q)e_3$ (see below) | ball $\Vert q\Vert \le r_{\max} = 1.02$ (the unit sphere is not convex; the ball is its convex hull, with margin for norm drift of the estimate) |
 | $\omega$ | yes, affinely | box $\lvert\omega_i\rvert \le \omega_{\max} = 2$ rad/s |
-| $u$ | only through $T_{\text{total}} = \sum f_i$, affinely | $`T_{\text{total}} \in [0,\, 4 f_{\max}] = [0,\, 29.4]`$ N |
+| $f$ | only through $T_{\text{total}} = \sum f_i$, affinely | $f_i \in [f_{\min}, f_{\max}]$, so $`T_{\text{total}} \in [4 f_{\min},\, 4 f_{\max}] = [0.29,\, 29.4]`$ N |
 
 ### 3.2 Finite reduction and cutting-plane solve
 
-Because $A$ is affine in $(q, \omega)$ and in $T_{\text{total}}$, and the LMI is affine in $A$, the LMI
-holds on the convex hull of the points where it is imposed. So only the 8 vertices of the
-$\omega$ box and the 2 endpoints of $T_{\text{total}}$ are needed, combined with a set of attitude
-points on $`\|q\| = r_{\max}`$ whose hull approximates the ball. Only the attitude needs real gridding.
+**What changed with the motor model.** On the 13-state model the thrust was the *input*, and
+$A$ was affine in $q$. Now the thrusts are *states*, and $A$ contains their effect on the
+acceleration,
+
+```math
+\frac{\partial \dot v}{\partial f_i} = \frac{r(q)}{m}, \qquad
+r(q) = \begin{bmatrix} 2(q_x q_z + q_w q_y) \\ 2(q_y q_z - q_w q_x) \\ 1 - 2(q_x^2 + q_y^2) \end{bmatrix},
+```
+
+the thrust direction, which is *quadratic* in $q$. The first version of the script stopped here:
+its structural check "A is affine in $(q, \omega)$" failed, as it should.
+
+**Lifting.** Treat $r$ as an extra variable. Then $A$ is affine in $(q, \omega, r)$ jointly and affine
+in $T_{\text{total}}$ (both asserted; the script also checks $\partial \dot v / \partial f_i = r(q)/m$
+numerically). The points that matter are the lifted ones $(q, r(q))$, and every one of them inside
+the ball is the midpoint of two lifted points *on* the sphere. Split $q = (a, b)$ with
+$a = (q_w, q_z)$, $b = (q_x, q_y)$: $r$ is bilinear in $(a, b)$ plus $-2\Vert b\Vert^2$. The two
+sphere points $(a \pm \alpha u,\, b)$ with $u \perp a$ a unit vector and
+$`\alpha^2 = r_{\max}^2 - \|q\|^2`$ average to $q$, keep $\Vert b \Vert$, and their thrust directions
+average to $r(q)$, because the bilinear part is linear in $a$. So the lifted ball lies in the convex
+hull of the lifted sphere, and the LMI imposed at attitudes on the sphere covers the interior.
+
+Evaluating $A$ at a sphere quaternion already gives the correct $r(q)$, so the algorithm is the
+same as before: the LMI holds on the convex hull of the points where it is imposed, and only the 8
+vertices of the $\omega$ box and the 2 endpoints of $T_{\text{total}}$ are needed, combined with a set
+of attitude points on $`\|q\| = r_{\max}`$. Only the attitude needs real gridding.
 
 1. **Attitude pool.** A $20^3$ hyperspherical grid on the unit sphere (both hemispheres, since
    $A(q) \ne A(-q)$ and the hull must contain the interior), scaled to $r_{\max}$.
 2. **SDP.** For a fixed $\kappa$, the LMI is affine in $(P, Q, R)$. Minimize
    $`\mathrm{tr}\,Q + \mathrm{tr}\,R`$ (tightest detectability statement) subject to $P \succeq 10^{-2} I$
    (fixes the scale), lower bounds on $\mathrm{diag}(Q)$ and $\mathrm{diag}(R)$, and the LMI
-   $\preceq -10^{-5} I$ at each point. $P$ is a full $19 \times 19$ matrix, $Q$ and $R$ are diagonal.
+   $\preceq -10^{-5} I$ at each point. $P$ is a full $23 \times 23$ matrix, $Q$ and $R$ are diagonal.
    The floors on $Q$ for $w_p$ and $w_q$ are set to $1$ so the exact kinematics
    ($\dot p = v$, $\dot q = \tfrac12 q \otimes \omega$) stay expensive to violate in the MHE.
 3. **Cutting plane.** Solve on a small active set of attitudes, evaluate the LMI eigenvalue on
    the *whole* pool independently of the solver, add the worst violators, repeat until none
    remain. The certificate is this eigenvalue check, not the solver status.
-4. **Spot check.** $`20\,000`$ random attitudes on the sphere with interior $\omega$, $T_{\text{total}}$ guard
-   the gap between the pool's polytope hull and the ball.
+4. **Spot checks.** $`20\,000`$ random attitudes on the sphere with interior $\omega$, $T_{\text{total}}$
+   guard the gap between the pool's polytope hull and the sphere. Another $`20\,000`$ attitudes
+   *inside* the ball test the lifting argument numerically.
 
 Only a certificate that passes both checks is written to `data/mhe_params.npz`.
 
@@ -154,19 +183,34 @@ All stored quantities are continuous time, so changing the MHE sample time or ho
 needs no new SDP solve. If the LMI is infeasible for a chosen $\lambda$, the options are a slower
 decay ($\lambda \to 1$, longer $T_{\min}$) or a smaller envelope.
 
+**Result on the 23-state model.** The LMI is feasible at $\lambda = 0.5$ per second, the same decay
+as on the 13-state model. The cutting plane converges in 10 iterations with 79 active attitudes
+(13-state: 80); the pool check, the sphere spot check and the interior spot check all give a
+largest LMI eigenvalue $\le -7.7 \cdot 10^{-6}$. $P$ has eigenvalues in $[0.01,\, 3.76]$. The new thrust
+channels get process-noise supply rates $Q_{f_i} \approx 0.057$, which is how strongly the MHE
+penalizes deviations from the lag model.
+
+**Cost.** One solve takes about 40 min (MOSEK). The SDP grows with the active set, from 20 s with
+8 active attitudes to $\approx 5$ min with 72, each attitude contributing 16 blocks of size
+$46 \times 46$; the eigenvalue check of the full pool ($`13\,758`$ attitudes) adds about 45 s per
+iteration. The papers demonstrate the scheme on small examples; at this size the vertex reduction,
+the cutting plane and the decoupling of the certificate from the online MHE are what make it
+practical. If it ever became too slow, the next levers would be the yaw symmetry of the dynamics
+(a yaw-invariant $P$ would leave only tilt to be gridded) and a smaller certified attitude range.
+
 ## 4. MHE (`ocp_config_mhe.py`, `state_est_mhe.py`)
 
 ### 4.1 acados formulation
 
 | Symbol | Dim | acados role |
 |---|---|---|
-| $z$ | 19 | `model.x` |
-| $w$ (process noise on every derivative) | 19 | `model.u` — the decision variable |
-| rotor thrust $u$ | 4 | part of `model.p` (known input) |
-| per-node parameter | 36 | `[t_age, a_arr, m_meas, z_prior(19), y_meas(10), u_rotor(4)]` |
+| $z = [x;\, f;\, d]$ | 23 | `model.x` |
+| $w$ (process noise on every derivative) | 23 | `model.u` — the decision variable |
+| thrust command $u$ | 4 | part of `model.p` (known input) |
+| per-node parameter | 40 | `[t_age, a_arr, m_meas, z_prior(23), y_meas(10), u(4)]` |
 
 The roles of `model.u` swap compared with the MPC: the optimizer chooses the noise, and the
-thrust becomes a parameter that differs per node.
+thrust command becomes a parameter that differs per node.
 
 **Horizon.** $`N = \lceil c\, T_{\min} / T_s \rceil`$ with $c = 1.5$, giving $N = 60$ and $T = 3.0$ s at
 $T_s = 0.05$ s. The minimum allowed is $N_{\min} = 41$ (strict $T > 2$ s). The guaranteed rate is
@@ -191,17 +235,28 @@ for both $q_r$ and $-q_r$.
 **Constraints.**
 - Soft $`\|q\|^2 = 1`$ on every node, including the terminal node whose state goes to the MPC
   (quadratic slack penalty $10^4$).
-- Hard $\lvert\hat\omega_i\rvert \le \omega_{\max}$ on every node: the estimated trajectory must stay in the
-  certified set (paper, constraint 8c). It is always feasible because $w_\omega$ can bend any
-  trajectory into the box. The MPC keeps the *true* rates inside with its soft $`0.9\,\omega_{\max}`$ box.
+- Hard $\lvert\hat\omega_i\rvert \le \omega_{\max}$ and $f_{\min} \le \hat f_i \le f_{\max}$ on every node: the
+  estimated trajectory must stay in the certified set (paper, constraint 8c). It is always feasible
+  because $w_\omega$ and $w_f$ can bend any trajectory into the box. The MPC keeps the *true* rates
+  inside with its soft $`0.85\,\omega_{\max}`$ box; the true thrusts stay in $[f_{\min}, f_{\max}]$ physically.
 
-**Solver.** `SQP_RTI` (one SQP iteration per sample), exact Hessian, `PARTIAL_CONDENSING_HPIPM`,
-ERK4 over each $T_s$.
+**Solver.** `SQP_RTI` (one SQP iteration per sample), `PARTIAL_CONDENSING_HPIPM`, ERK4 with two
+steps per $T_s$ (the thrust lag $\tau_m = 30$ ms is shorter than $T_s$), as in the MPC and the EKF.
+
+**Hessian: Gauss-Newton, not exact.** The 13-state MHE used the exact Hessian. On the motor
+model the first closed-loop run with the exact Hessian failed: HPIPM stopped with
+`ACADOS_MINSTEP` in 16 of 200 solves, the wrapper returned the unchanged warm start (a stale
+estimate) during the aggressive take-off, and from $t \approx 1.2$ s the loop diverged. The cause is
+the dynamics' curvature: the thrust states push along the body axis, $\dot v \ni R(q)e_3 \sum f_i / m$,
+a bilinear term that makes the exact Lagrangian Hessian indefinite. For an `EXTERNAL` cost,
+acados always evaluates the cost Hessian exactly; `GAUSS_NEWTON` only drops the second-order terms
+of the dynamics. With it, all solves succeed. Regularizing the exact Hessian (`MIRROR`) also
+works but takes about twice as long.
 
 ### 4.2 Window, prior and start-up
 
 The MHE is in **prediction form**, as in the paper: nodes $0 \dots N-1$ hold the measurements
-$y_{k-N} \dots y_{k-1}$ and thrusts $u_{k-N} \dots u_{k-1}$; node $N$ is the free end point $\hat z_k$. The
+$y_{k-N} \dots y_{k-1}$ and thrust commands $u_{k-N} \dots u_{k-1}$; node $N$ is the free end point $\hat z_k$. The
 current measurement $y_k$ is stored and first used at $k + 1$, so the estimate lags the EKF by
 one sample.
 
@@ -209,12 +264,27 @@ one sample.
   rolling buffer.
 - **Growing horizon** while $t < T$: the available $k$ samples fill the last $k$ stages, with the
   initial prior $\bar z_0$ at node $N - k$ (window length $\min(t, T)$, as in the paper). The leading
-  nodes carry no data; the penalized $w$ makes the optimum pass straight through them.
+  nodes are padding: flags $a_i = m_i = 0$ switch off their arrival and measurement costs, so no
+  data is invented, and the penalized $w$ makes the optimum pass straight through them.
+  *Checked on the motor model:* going backward through the lag, a thrust deviation would grow by
+  $e^{T_s/\tau_m} \approx 5.3$ per node and could force $w_f \ne 0$ on the padding to respect the thrust
+  box. Measured over the 59 growing-phase solves, the padding carries at most $`2.6 \cdot 10^{-4}`$ of
+  the total cost (median $`2 \cdot 10^{-7}`$), $\lvert w\rvert \le 2.2 \cdot 10^{-3}$ there, and no padding
+  thrust touches the box. Switching the padding's $w$ cost off entirely would remove the last
+  trace of it, but leave those nodes without curvature and the QP no longer strictly convex.
 - **Warm start:** the previous solution shifted by one node; the first solve starts from $\bar z_0$
   rather than acados' zeros, where $q = 0$ would make the quaternion error degenerate.
 
 Buffers for $\hat z$, $y$ and $u$ have length $N$, so the growing and the sliding phase run the
 same code.
+
+```bash
+./run.sh stage4_estimation/detectability_check.py   # certificate → data/mhe_params.npz (needs cvxpy + MOSEK)
+./run.sh stage4_estimation/simulate_mhe.py          # → results/stage4b_mhe/
+./run.sh stage4_estimation/simulate_compare.py      # EKF vs MHE from the saved runs → results/stage4_compare/
+```
+
+The 13-state version from its tag:
 
 ```bash
 git checkout stage4
@@ -226,8 +296,9 @@ git checkout stage4
 ## 5. Scenario
 
 Identical to [Stage 4a](stage4a_ekf.md#4-scenario): same reference, disturbance, sensor noise,
-seed, prior $\bar z_0$ and controller. Steady-state numbers cover $t = 5\text{–}10$ s; errors are the
-norm of the per-axis mean absolute error, as printed by `simulate_compare.py`.
+seed, prior $\bar z_0$ (with $\hat f = f_{\text{hover}}$) and controller, including the soft body-rate
+box $0.85\,\omega_{\max}$. Steady-state numbers cover $t = 5\text{–}10$ s; errors are the norm of the
+per-axis mean absolute error, as printed by `simulate_compare.py`.
 
 ## 6. Results
 
@@ -236,8 +307,8 @@ norm of the per-axis mean absolute error, as printed by `simulate_compare.py`.
 ![Velocity estimate vs truth](../results/stage4b_mhe/velocity_estimation.png)
 
 In steady state the velocity estimate is smooth and close to the truth (error
-$11$ mm/s). During the maneuver it is visibly biased: $\hat v_x$ is too small ($2.5$ vs.
-$2.7$ m/s at the peak), $\hat v_y$ and $\hat v_z$ too large ($1.26$ vs. $1.15$ m/s, $5.0$ vs. $4.3$ m/s).
+$11$ mm/s). During the maneuver it is visibly biased: $\hat v_x$ is too small ($2.52$ vs.
+$2.64$ m/s at the peak), $\hat v_y$ and $\hat v_z$ too large ($1.24$ vs. $1.10$ m/s, $4.9$ vs. $4.0$ m/s).
 Each sign matches the disturbance estimate at that time, which has not converged yet: with
 $\hat d_f$ still near zero, the model underestimates the push in $+x$ and the pull in $-y$, and the
 extra weight in $-z$, so it predicts too little $v_x$ and too much $v_y$ and $v_z$. The velocity error
@@ -248,36 +319,55 @@ is a consequence of the disturbance error, not an independent one.
 ![Disturbance estimate](../results/stage4b_mhe/disturbance.png)
 
 Starting from $\hat d = 0$, the force estimates approach the true values smoothly over about
-$2$ s: the error norm stays below $0.1$ N from $t = 1.95$ s and below $0.05$ N from $t = 2.35$ s.
-In steady state they are unbiased with a standard deviation of about $0.005$ N per axis, roughly
-$20\times$ less than the EKF. Torque estimates stay within $\pm 10^{-3}$ N·m.
+$2$ s: the error norm stays below $0.1$ N from $t = 1.65$ s and below $0.05$ N from $t = 2.5$ s.
+In steady state they are unbiased (mean error $\le 0.005$ N) with a standard deviation of about
+$0.005$ N per axis, roughly $20\times$ less than the EKF. Torque estimates stay within
+$\pm 2 \cdot 10^{-3}$ N·m after $t = 2$ s.
 
-### 6.3 States and inputs
+### 6.3 Thrust estimation
+
+![Thrust estimate vs truth](../results/stage4b_mhe/thrust_estimation.png)
+
+The rotor thrusts are not measured, and the MHE estimates them better than the EKF: in steady
+state the mean absolute error is $0.0004\text{–}0.0011$ N per motor ($`15\text{–}40\times`$ less than the
+EKF), and the largest error in the take-off is $0.5$ N ($0.9$ N for the EKF). The window helps where
+the one-step EKF struggles: when the rotors spin down faster than the model's lag, the whole
+3 s of measured motion constrains $\hat f$, and $w_f$ absorbs the mismatch.
+
+The lag asymmetry that biased the EKF's $\hat d_{f_z}$ ([Stage 4a, §5.2](stage4a_ekf.md#52-disturbance-estimation)) is
+almost absent here: over $t = 5\text{–}10$ s the commands sum to $12.769$ N, the rotors to $12.767$ N,
+and $\hat f$ to $12.769$ N. The MHE's commands fluctuate much less ([§6.4](#64-states-and-inputs)), so the
+rotors hardly spin up and down, and the MHE has no asymmetry to absorb.
+
+### 6.4 States and inputs
 
 ![Plant state](../results/stage4b_mhe/states.png)
 
-Position settles within $2$ cm after $3.6$ s, with an $x$ overshoot of $9$ cm, and then holds the
-reference with an error of $6.8$ mm and no bias (below $3$ mm per axis). Roll and pitch settle
-at $-1.34°$ and $-2.24°$, the analytical equilibrium, with a standard deviation of only $0.35°$.
-The maximum true body rate is $1.83$ rad/s, inside the certified $2$ rad/s.
+Position settles within $2$ cm after $3.65$ s, with an $x$ overshoot of $9$ cm, and then holds the
+reference with an error of $6.7$ mm and no bias (below $3$ mm per axis). Roll and pitch settle
+at $-1.33°$ and $-2.24°$, the analytical equilibrium, with a standard deviation of only $0.35°$.
+The maximum true body rate is $1.95$ rad/s, inside the certified $2$ rad/s.
 
-![Motor thrusts](../results/stage4b_mhe/inputs.png)
+![Thrust commands and rotor thrust](../results/stage4b_mhe/inputs.png)
 
-Thrusts settle at the equilibrium ($12.77$ N total) with a standard deviation of $0.08$ N per
-motor and $0.15$ N in total, about $4\text{–}5\times$ less than with the EKF.
+Thrusts settle at the equilibrium ($12.77$ N total). The commands fluctuate with a standard
+deviation of $0.11$ N per motor ($0.20$ N in total), the rotor thrust with $0.075$ N per motor
+($0.14$ N in total), about $5\times$ less than with the EKF.
 
 <p align="center">
   <img src="../results/stage4b_mhe/trajectory_3d.png" alt="3D flight path" width="60%">
 </p>
 
-### 6.4 Computation time
+### 6.5 Computation time
 
 ![Computation time](../results/stage4b_mhe/solve_time.png)
 
-One MHE solve takes $13.8$ ms on average ($25.8$ ms at the 99th percentile, $31.5$ ms maximum).
-It is about $20$ ms during the first $1.7$ s of large maneuvers and $12.6$ ms afterwards. MHE plus
-MPC stays below $35$ ms in every step, inside the $50$ ms sample time. The MPC itself takes
-$1.6$ ms. All SQP_RTI calls succeeded.
+One MHE solve takes $18.4$ ms on average ($27.6$ ms at the 99th percentile, $36.2$ ms maximum),
+the same during the large maneuvers as afterwards. MHE plus MPC stays below $39$ ms in every
+step, inside the $50$ ms sample time. The MPC itself takes $2.3$ ms. All SQP_RTI calls
+succeeded. Compared with the 13-state MHE ($13.8$ ms), the larger state (23 instead of 19) and
+the two integrator steps per sample cost about a third more time; Gauss-Newton keeps it
+there ([§4.1](#41-acados-formulation)).
 
 ## 7. EKF vs MHE
 
@@ -285,19 +375,25 @@ $1.6$ ms. All SQP_RTI calls succeeded.
 
 | Steady state ($t = 5\text{–}10$ s) | EKF | MHE | Ratio |
 |---|---|---|---|
-| position error $\Vert \Delta p\Vert$ | $10.1$ mm | $6.8$ mm | $1.5\times$ |
-| velocity estimation error $\Vert \Delta \hat v\Vert$ | $53.2$ mm/s | $11.0$ mm/s | $4.8\times$ |
-| force-disturbance error $\Vert \Delta \hat d_f\Vert$ | $0.138$ N | $0.0078$ N | $18\times$ |
-| roll / pitch standard deviation | $1.4°$ / $2.0°$ | $0.35°$ / $0.37°$ | $4\text{–}5\times$ |
-| total thrust standard deviation | $0.75$ N | $0.15$ N | $5\times$ |
+| position error $\Vert \Delta p\Vert$ | $10.4$ mm | $6.7$ mm | $1.6\times$ |
+| velocity estimation error $\Vert \Delta \hat v\Vert$ | $50.5$ mm/s | $11.0$ mm/s | $4.6\times$ |
+| force-disturbance error $\Vert \Delta \hat d_f\Vert$ | $0.148$ N | $0.0083$ N | $18\times$ |
+| thrust estimation error per motor | $0.014\text{–}0.020$ N | $0.0004\text{–}0.0011$ N | $15\text{–}40\times$ |
+| roll / pitch standard deviation | $1.4°$ / $1.8°$ | $0.34°$ / $0.35°$ | $4\text{–}5\times$ |
+| total rotor thrust standard deviation | $0.68$ N | $0.14$ N | $5\times$ |
 
 | Transient and cost | EKF | MHE |
 |---|---|---|
 | $\hat d_f$ mean converged | $\approx 1$ s | $\approx 2$ s |
-| $\Vert \hat d_f - d_f\Vert < 0.1$ N from | not reached (noise band $\approx 0.1\text{–}0.3$ N) | $1.95$ s |
-| $\Vert p - p_{\text{ref}}\Vert < 5$ cm / $< 2$ cm from | $1.9$ s / $4.0$ s | $2.75$ s / $3.6$ s |
-| $p_x$ overshoot | $15$ cm | $9$ cm |
-| estimator time, mean / p99 | $0.69$ / $1.5$ ms | $13.8$ / $25.8$ ms |
+| $\Vert \hat d_f - d_f\Vert < 0.1$ N from | not reached (noise band $\approx 0.1\text{–}0.3$ N) | $1.65$ s |
+| $\Vert p - p_{\text{ref}}\Vert < 5$ cm / $< 2$ cm from | $1.95$ s / $9.5$ s | $2.8$ s / $3.65$ s |
+| $p_x$ overshoot | $19$ cm | $9$ cm |
+| largest thrust estimation error (take-off) | $0.9$ N | $0.5$ N |
+| max true body rate | $1.98$ rad/s | $1.95$ rad/s |
+| estimator time, mean / p99 | $0.5$ / $0.8$ ms | $18.4$ / $27.6$ ms |
+
+The EKF's position error crosses 2 cm repeatedly in steady state, which is why it stays above
+that threshold until $9.5$ s; its typical steady-state error is $10$ mm.
 
 **Interpretation.** The two estimators sit at different points of the same bandwidth-versus-noise
 trade-off. The EKF reacts within one sample and gets the disturbance mean right in about 1 s,
@@ -316,8 +412,9 @@ move per step during large changes.
 the MHE weights come from the certificate. The two are therefore not compared at equal
 bandwidth. An EKF retuned to the MHE's $\approx 2$ s convergence (smaller $Q_{c,f}$) would be less
 noisy, and that comparison would isolate the benefit of the window from the effect of tuning.
-Robustness to model mismatch (mass or inertia error between plant and estimator model) is
-also not tested yet.
+Robustness to model mismatch is tested only in one form: the rotor plant's lag differs from the
+estimators' first-order lag for large steps. Mass or inertia errors between plant and estimator
+model are not tested yet.
 
 ## 8. Limitations and open points
 
@@ -325,16 +422,22 @@ also not tested yet.
   $q$; the MHE cost uses the multiplicative error $\lvert q \otimes q_r^{-1}\rvert - [1,0,0,0]$. For small
   errors the two agree up to a factor, but the cost is not literally the certified function.
 - **Exact optimizer vs. RTI.** The stability result of [§2.2](#22-mhe-cost-and-stability-result) applies to the optimal MHE solution; `SQP_RTI` performs
-  one iteration per sample. All solves succeeded, but optimality is not checked.
+  one iteration per sample with a Gauss-Newton Hessian. All solves succeeded, but optimality is
+  not checked.
+- **Failed solves.** If a QP fails, the wrapper returns the unchanged warm start, a stale
+  estimate. That never happens with Gauss-Newton in this scenario, but a fallback (e.g. the
+  previous estimate predicted one step through the model) would make the loop more robust.
 - **Continuous-time certificate, discrete implementation.** The cost integral is a left Riemann
   sum on the $T_s$ grid and the model an RK4 step. Both approximations shrink with $T_s$; the
   certificate itself is purely continuous time.
 - **Hull of the attitude pool.** The LMI is proven on the convex hull of a finite attitude pool,
-  a polytope inside the ball $`\|q\| \le 1.02`$. The random spot check guards the gap but is not a
-  proof.
+  a polytope inside the (lifted) ball $`\|q\| \le 1.02`$. The random spot checks guard the gap but
+  are not a proof.
 - **Envelope.** The guarantee assumes the true and estimated trajectories stay in the certified
-  set. The body rates are logged and stay inside ($1.83 \le 2$ rad/s); $`\|q\|`$ of the estimate is
-  not logged yet.
+  set. The body rates are logged and stay inside ($1.95 \le 2$ rad/s), but only after tightening
+  the MPC's soft rate box from $0.9$ to $0.85\,\omega_{\max}$: the thrust lag makes the rate overshoot
+  a soft box further. The margin is small, and a soft box is no guarantee. $`\|q\|`$ of the
+  estimate is not logged yet.
 
 ## 9. Takeaways
 
@@ -343,10 +446,14 @@ also not tested yet.
   $T > \ln 4 / \kappa = 2$ s. The resulting estimator is robustly stable by construction on the
   certified envelope, with the caveats of [§8](#8-limitations-and-open-points).
 - **It is the more accurate estimator on this scenario.** Once converged it estimates velocity
-  about $5\times$ and the disturbance about $20\times$ better than the EKF, which shows up as calmer
-  attitude and thrust and a smaller position error.
-- **The price is a slower start and $20\times$ the computation.** $\hat d$ needs about 2 s instead of 1 s,
-  and a solve takes $14$ ms instead of $0.7$ ms, still well inside the $50$ ms budget.
+  about $5\times$, the disturbance about $20\times$ and the unmeasured rotor thrusts $15\text{–}40\times$
+  better than the EKF, which shows up as calmer attitude and thrust and a smaller position error.
+- **The price is a slower start and $35\times$ the computation.** $\hat d$ needs about 2 s instead of
+  1 s, and a solve takes $18$ ms instead of $0.5$ ms, still well inside the $50$ ms budget.
+- **The motor model needed three practical fixes the theory does not mention.** A lifted
+  vertex argument for the certificate (the thrust states make $A$ quadratic in $q$), a
+  Gauss-Newton Hessian for the online solve (the exact one is indefinite), and a tighter
+  rate margin in the MPC (the lag delays braking).
 
 Stages 5 and 6 build on one of the two estimators. The comparison above favours the MHE as
 long as the closed loop fits the time budget once the MPC grows with obstacle constraints and

@@ -1,6 +1,6 @@
 """
-obstacle_sim_config.py — Stage 7 Shared Scene and Closed Loop (Distance / DCBF)
-===============================================================================
+closed_loop.py — Stage 7 Shared Scene and Closed Loop (Distance / DCBF)
+=======================================================================
 The quadrotor flies the Stage 6 helix (R = 2 m, 5 m climb over 3 turns,
 2 m/s) through a field of vertical pillars that stand ON the reference path.
 The reference is left as it is — the controller has to leave it to pass a
@@ -45,7 +45,7 @@ Imports:
     reference_flatness.py     → flat_to_state_input
     ocp_config_obstacle.py    → Pillar, create_solver, projected shift_warm_start, clearance
     ocp_config_trajectory.py  → runtime helpers (init_guess, set_trajectory, ...)
-    closed_loop_sim_config.py → OMEGA_MPC  (same soft |ω| box as Stage 6)
+    stage4 closed_loop.py     → OMEGA_MPC  (same soft |ω| box as Stage 6)
 
 Shared by both stages: the scene (PILLARS), the closed loop
 simulate(gamma=), encounters, summarize and make_figures (six figures).
@@ -66,7 +66,7 @@ from stage6_trajectory.reference_flatness      import flat_to_state_input
 import stage6_trajectory.ocp_config_trajectory as traj
 import stage7_obstacle.ocp_config_obstacle     as obs
 from stage7_obstacle.ocp_config_obstacle       import Pillar, R_DRONE, MARGIN
-from stage4_estimation.closed_loop_sim_config  import OMEGA_MPC
+from stage4_estimation.closed_loop             import OMEGA_MPC
 from core.plot_utils                           import (plot_states, plot_inputs, plot_3d_trajectory,
                                                        plot_tracking_error, plot_obstacle_topview,
                                                        plot_obstacle_clearance)

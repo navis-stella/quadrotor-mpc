@@ -72,7 +72,7 @@ $`h_j(F(x_i, u_i)) = h_j(x_{i+1})`$ exactly.
 | one solver per $\gamma$ | model name `quadrotor_obst_dcbf_g0p2` etc., so several $\gamma$ can run in one process |
 
 `create_solver(pillars, ..., gamma=None)` builds 7a, and `gamma=γ` builds 7b. The closed loop
-`obstacle_sim_config.simulate(gamma=)` is shared, including the warm start that projects guess nodes
+`closed_loop.simulate(gamma=)` is shared, including the warm start that projects guess nodes
 onto the constraint circles.
 
 **Check against 7a.** With $\gamma = 1$ the DCBF form must reproduce the distance constraint. It
@@ -216,7 +216,7 @@ run, the same constraint); `print_sweep` prints the others.
 |---|---|
 | `ocp_config_obstacle.py` | `dcbf_pillars()` (with `rk4_step()` from `core/integrators.py`); `add_pillar_constraints(..., gamma=)` and `create_solver(..., gamma=)` build the DCBF form; `Z_L1_DCBF`; `obstacle_slack(..., dcbf=True)` |
 | `simulate_obst_dcbf.py` | main run ($\gamma = 0.2$) and `--sweep`; metrics `swerve_lead()`, `sweep_row()`, `print_sweep()` |
-| `obstacle_sim_config.py` | scene and closed loop shared with Stage 7a: `simulate(gamma=)`, `summarize()`, `make_figures()` |
+| `closed_loop.py` | scene and closed loop shared with Stage 7a: `simulate(gamma=)`, `summarize()`, `make_figures()` |
 | `plot_utils.py` | `plot_dcbf_sweep()` (new) |
 
 ```bash

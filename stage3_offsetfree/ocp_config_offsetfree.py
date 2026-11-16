@@ -27,10 +27,6 @@ Runtime usage:
     ocp_solver.set(0, 'lbx', x_meas)       # [x; f] (17)
     ocp_solver.set(0, 'ubx', x_meas)
     ocp_solver.solve()
-
-Transitional (removed when Stage 4 migrates): create_rigid_body_solver() and
-set_rigid_body_reference() keep the 13-state rigid-body version, which the
-Stage 4 estimators still use.
 """
 
 import numpy as np
@@ -39,10 +35,10 @@ from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
 from core.quadrotor_model import (
-    create_thrust_lag_disturbance_model, create_disturbance_model,
-    f_hover, F_MIN, F_MAX, NX, NXM, NU, ND,
+    create_thrust_lag_disturbance_model,
+    f_hover, F_MIN, F_MAX, NXM, NU, ND,
 )
-from core.terminal_cost import compute_thrust_lag_dare_terminal_cost, compute_dare_terminal_cost
+from core.terminal_cost import compute_thrust_lag_dare_terminal_cost
 from core.codegen import build_path
 from stage1_basic.ocp_config_basic import Q, Q_F, R_CMD
 
@@ -203,73 +199,3 @@ def set_reference(ocp_solver: AcadosOcpSolver,
     for k in range(N):
         ocp_solver.set(k, 'yref', yref)
     ocp_solver.set(N, 'yref', yref_e)
-
-
-# ═════════════════════════════════════════════════════════════════
-# Transitional: 13-state rigid-body version (Stage 4 until it migrates)
-# ═════════════════════════════════════════════════════════════════
-def create_rigid_body_solver(x_ref:     np.ndarray,
-                             N:         int   = 20,
-                             T_horizon: float = 1.0,
-                             omega_max: float = None) -> AcadosOcpSolver:
-    """
-    The pre-migration Stage 3 solver: 13 states, thrusts f as direct input,
-    unscaled DARE terminal cost. Kept unchanged so the Stage 4 results stay
-    reproducible until Stage 4 moves to the motor model.
-    """
-    model = create_disturbance_model()
-    ocp   = AcadosOcp()
-    ocp.model = model
-
-    Ts    = T_horizon / N
-    u_ref = np.full(NU, f_hover)
-
-    ocp.cost.cost_type   = 'NONLINEAR_LS'
-    ocp.cost.cost_type_e = 'NONLINEAR_LS'
-    ocp.model.cost_y_expr   = ca.vertcat(model.x, model.u)   # (17,)
-    ocp.model.cost_y_expr_e = model.x                        # (13,)
-
-    Q_rb = np.diag([
-        80.,  80.,  120.,           # px, py, pz
-        10.,  10.,   15.,           # vx, vy, vz
-        10., 120.,  120.,  80.,     # qw, qx, qy, qz
-         1.,   1.,    1.            # p,  q,  r
-    ])
-    R_rb = np.diag([0.1, 0.1, 0.1, 0.1])
-
-    ocp.cost.W   = block_diag(Q_rb, R_rb)
-    ocp.cost.W_e = compute_dare_terminal_cost(Q_rb, R_rb, Ts)
-    ocp.cost.yref   = np.concatenate([x_ref, u_ref])
-    ocp.cost.yref_e = x_ref
-
-    ocp.constraints.x0    = np.zeros(NX)
-    ocp.constraints.lbu   = np.zeros(NU)
-    ocp.constraints.ubu   = np.full(NU, F_MAX)
-    ocp.constraints.idxbu = np.arange(NU)
-
-    if omega_max is not None:
-        add_soft_omega_box(ocp, omega_max)
-
-    ocp.parameter_values = np.zeros(ND)
-
-    ocp.solver_options.N_horizon       = N
-    ocp.solver_options.tf              = T_horizon
-    ocp.solver_options.nlp_solver_type = 'SQP_RTI'
-    ocp.solver_options.integrator_type = 'ERK'
-    ocp.solver_options.qp_solver       = 'PARTIAL_CONDENSING_HPIPM'
-    ocp.solver_options.hessian_approx  = 'GAUSS_NEWTON'
-    ocp.solver_options.print_level     = 0
-
-    ocp.code_export_directory = build_path('c_generated_code')
-    return AcadosOcpSolver(ocp, json_file=build_path(f'{ocp.model.name}_ocp.json'))
-
-
-def set_rigid_body_reference(ocp_solver: AcadosOcpSolver,
-                             x_s: np.ndarray,
-                             u_s: np.ndarray,
-                             N: int):
-    """Reference update of the 13-state version: y = [x; u] (17), y_e = x (13)."""
-    yref = np.concatenate([x_s, u_s])
-    for k in range(N):
-        ocp_solver.set(k, 'yref', yref)
-    ocp_solver.set(N, 'yref', x_s)

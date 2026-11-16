@@ -18,7 +18,8 @@ This is the mechanism that gives offset-free MPC its integral action.
 
 Algorithm (discrete EKF on the integrated model):
     Predict:  z⁺ = Φ(z, u)  — RK4 over Ts in N_RK4 substeps (τ_m < Ts)
-              F_d = ∂Φ/∂z   — exact Jacobian of that discrete map (CasADi)
+              F_d = ∂Φ/∂z   — exact Jacobian of that discrete map (CasADi,
+                              core.quadrotor_model.get_thrust_lag_augmented_step)
               P⁺  = F_d P F_dᵀ + Q_aug·Ts
     Update:   K = P H^T (H P H^T + R)^{-1}
               z_hat += K (y - H z_hat)
@@ -38,55 +39,19 @@ Tuning guide:
     R   (NXM):   measurement noise covariance (clean full-state access)
 
 Relation to Stage 4a (state_est_ekf.py):
-    Stage 4a measures only y = [p; q; ω] and has not been migrated to the
-    motor model yet (13-state augmented dynamics, Euler covariance step).
+    Same augmented model and prediction, but Stage 4a measures only
+    y = [p; q; ω] (velocity and rotor thrusts unmeasured) with sensor noise.
 """
 
 import numpy as np
-import casadi as ca
 
 from core.quadrotor_model import (
-    NXM, NU, ND,
-    create_thrust_lag_disturbance_model, thrust_lag_hover_point,
+    NXM, ND, NZM,
+    get_thrust_lag_augmented_step, thrust_lag_hover_point,
     quat_normalize,
 )
 
-NZM    = NXM + ND   # 23 — augmented state [x; f; d]
-N_RK4  = 2          # RK4 substeps per Ts, as sim_method_num_steps of the OCP
-
-
-# ─────────────────────────────────────────────────────────────────
-# Discrete augmented dynamics  Φ(z, u)  and  ∂Φ/∂z
-# ─────────────────────────────────────────────────────────────────
-def get_augmented_step(Ts: float, n_steps: int = N_RK4):
-    """
-    CasADi functions of one prediction step of the augmented model:
-
-        Phi(z, u)  = [RK4ⁿ(x, u; d); d]      (23,)
-        F_d(z, u)  = ∂Phi/∂z                  (23×23)
-
-    The disturbance enters the thrust-lag model as the parameter p; here it
-    is the last ND entries of z and stays constant over the step.
-    """
-    model = create_thrust_lag_disturbance_model()
-    f = ca.Function('f_tl', [model.x, model.u, model.p], [model.f_expl_expr])
-
-    z = ca.SX.sym('z', NZM)
-    u = ca.SX.sym('u', NU)
-    x, d = z[:NXM], z[NXM:]
-
-    h = Ts / n_steps
-    for _ in range(n_steps):
-        k1 = f(x,              u, d)
-        k2 = f(x + h / 2 * k1, u, d)
-        k3 = f(x + h / 2 * k2, u, d)
-        k4 = f(x + h * k3,     u, d)
-        x = x + h / 6 * (k1 + 2 * k2 + 2 * k3 + k4)
-
-    z_next = ca.vertcat(x, d)
-    Phi = ca.Function('Phi_aug', [z, u], [z_next], ['z', 'u'], ['z_next'])
-    F_d = ca.Function('F_d_aug', [z, u], [ca.jacobian(z_next, z)], ['z', 'u'], ['F_d'])
-    return Phi, F_d
+N_RK4 = 2          # RK4 substeps per Ts, as sim_method_num_steps of the OCP
 
 
 class AugEKF:
@@ -152,7 +117,7 @@ class AugEKF:
             ])
 
         # ── CasADi discrete step and its Jacobian ──────────────
-        self.Phi, self.F_d = get_augmented_step(Ts)
+        self.Phi, self.F_d = get_thrust_lag_augmented_step(Ts, N_RK4)
 
     # ─────────────────────────────────────────────────────────────
     # Prediction step

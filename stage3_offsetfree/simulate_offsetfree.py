@@ -18,7 +18,7 @@ Validation scenario:
         d_fx = +0.5 N     (wind force in x, world frame)
         d_fy = -0.3 N     (wind force in y, world frame)
         d_fz = -2.943 N   (30% mass error)
-    Stage 4 (closed_loop_sim_config) reuses these values for comparability.
+    Stage 4 (closed_loop) reuses these values for comparability.
 
     Phase 1 (0 ≤ t < T_ACTIVATE):
         EKF runs and converges d̂, but offset-free is OFF.

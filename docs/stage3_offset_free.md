@@ -67,7 +67,7 @@ builder (`_build_f_expl`) produces every variant, so all of them share exactly t
 | `create_thrust_lag_model()` | $d = 0$ | $n_x = 17$ | Stages 1–2 |
 | `create_thrust_lag_disturbance_model()` | runtime parameter `model.p` | $n_x = 17$, $p \in \mathbb{R}^6$ | MPC, $p = \hat d$ |
 | `create_rotor_plant()` | runtime parameter `model.p` | $[x;\, \Omega]$, $p \in \mathbb{R}^6$ | plant, $p = d_{\text{true}}$ |
-| `ekf_aug.get_augmented_step()` | extra states | $n_z = 23$ | EKF only |
+| `get_thrust_lag_augmented_step()` | extra states | $n_z = 23$ | EKFs of Stages 3–4 |
 
 The MPC never sees $d$ as a state: its dimension stays 17, and $\hat d$ is injected as a
 parameter. Only the estimator works with the augmented state.
