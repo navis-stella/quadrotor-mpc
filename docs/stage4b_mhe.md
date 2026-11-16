@@ -218,9 +218,9 @@ same code.
 
 ```bash
 git checkout stage4
-./run.sh stage4_estimation/detectability_check.py  # certificate → data/mhe_params.npz (needs cvxpy + MOSEK)
-./run.sh stage4_estimation/simulate_mhe.py  # → results/stage4b_mhe/
-./run.sh stage4_estimation/simulate_compare.py  # EKF vs MHE from the saved runs → results/stage4_compare/
+./run.sh detectability_check.py   # certificate → data/mhe_params.npz (needs cvxpy + MOSEK)
+./run.sh simulate_mhe.py          # → results/stage4b_mhe/
+./run.sh simulate_compare.py      # EKF vs MHE from the saved runs → results/stage4_compare/
 ```
 
 ## 5. Scenario
