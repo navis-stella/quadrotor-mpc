@@ -64,68 +64,73 @@ Equations of motion, disturbance model and quaternion conventions →
 
 ```
 quadrotor_3d_nmpc/
-├── quadrotor_3d_model.py       # Shared: CasADi dynamics (nominal, disturbance-parameterized,
-│                               #         augmented [x;d], MHE model), hover linearization,
-│                               #         AcadosSimSolver plant, quaternion utilities,
-│                               #         measurement model h(z), tracking model
-│                               #         [x; p_a] and steady-state map g(p_a)
-├── plot_utils.py               # Shared: all figures
+├── core/                         # Shared by all stages
+│   ├── quadrotor_3d_model.py     #   CasADi dynamics (nominal, disturbance-parameterized,
+│   │                             #   augmented [x;d], MHE model), hover linearization,
+│   │                             #   AcadosSimSolver plant, quaternion utilities,
+│   │                             #   measurement model h(z), tracking model
+│   │                             #   [x; p_a] and steady-state map g(p_a)
+│   ├── plot_utils.py             #   all figures
+│   ├── sensor_simulator.py       #   y = [p; q; ω] + Gaussian noise (Stages 4, 6)
+│   ├── ss_target.py              #   analytical steady-state target (Stages 3–4)
+│   ├── terminal_cost.py          #   reduced-order DARE terminal cost P_lqr (Stages 2b, 3–4, 6)
+│   ├── integrators.py            #   symbolic RK4 step of an acados model (Stages 7b, 8)
+│   └── codegen.py                #   build/ location of the generated solver code
 │
-├── ocp_config_basic.py         # Stage 1   — W_e = Q
-├── simulate_basic.py           # Stage 1   — entry point
-├── compute_qih_params.py       # Stage 2a  — offline CARE / Lyapunov P, α, Lipschitz check
-├── ocp_config_qih.py           # Stage 2a  — P_lyap + soft terminal set
-├── simulate_qih.py             # Stage 2a  — entry point (+ terminal-set diagnostic)
-├── ocp_config_dare.py          # Stage 2b  — P_lqr terminal cost (DARE from ocp_config_offsetfree)
-├── simulate_dare.py            # Stage 2b  — entry point
-├── ekf_aug.py                  # Stage 3   — augmented EKF, full-state measurement
-├── simulate_offsetfree.py      # Stage 3   — entry point (offset-free switched on at t = 4 s)
+├── stage1_basic/                 # Stage 1   — W_e = Q
+│   ├── ocp_config_basic.py
+│   └── simulate_basic.py         #             entry point
+├── stage2_terminal/              # Stage 2   — terminal ingredients
+│   ├── compute_qih_params.py     #   2a: offline CARE / Lyapunov P, α, Lipschitz check
+│   ├── ocp_config_qih.py         #   2a: P_lyap + soft terminal set
+│   ├── simulate_qih.py           #   2a: entry point (+ terminal-set diagnostic)
+│   ├── ocp_config_dare.py        #   2b: P_lqr terminal cost
+│   └── simulate_dare.py          #   2b: entry point
+├── stage3_offsetfree/            # Stage 3   — offset-free NMPC, full state feedback
+│   ├── ocp_config_offsetfree.py  #             d̂ as runtime parameter, DARE terminal cost,
+│   │                             #             soft |ω| box (reused in Stage 4)
+│   ├── ekf_aug.py                #             augmented EKF, full-state measurement
+│   └── simulate_offsetfree.py    #             entry point (offset-free switched on at t = 4 s)
+├── stage4_estimation/            # Stage 4   — partial noisy measurement, EKF (4a) / MHE (4b)
+│   ├── observability_check.py    #   observability of (F, H) at hover
+│   ├── state_est_ekf.py          #   4a: augmented EKF
+│   ├── detectability_check.py    #   4b: LMI detectability certificate → data/mhe_params.npz
+│   ├── ocp_config_mhe.py         #   4b: acados MHE OCP + certificate I/O
+│   ├── state_est_mhe.py          #   4b: MHE runtime wrapper (buffers, prior, warm start)
+│   ├── closed_loop_sim_config.py #   the one closed loop both estimators run in
+│   ├── simulate_ekf.py           #   4a: entry point
+│   ├── simulate_mhe.py           #   4b: entry point
+│   └── simulate_compare.py       #   EKF vs MHE from the saved runs
+├── stage5_tracking/              # Stage 5   — tracking MPC with artificial reference
+│   ├── ocp_config_tracking.py    #             p_a as extra state, x_N = x_a, offset cost V_o
+│   └── simulate_tracking.py      #             entry point (reference jumps at t = 0, 5, 10 s)
+├── stage6_trajectory/            # Stage 6   — helix tracking
+│   ├── reference_generate.py     #             helix reference (p … snap, yaw), smooth up to snap
+│   ├── reference_flatness.py     #             differential flatness: (p, ψ, derivatives) → (x_r, u_r)
+│   ├── ocp_config_trajectory.py  #             per-node reference, quaternion state error, warm start
+│   └── simulate_trajectory.py    #             entry point (MHE run; --nominal verification)
+├── stage7_obstacle/              # Stage 7   — pillars on the helix
+│   ├── ocp_config_obstacle.py    #             Stage 6 OCP + soft pillar constraints: distance form
+│   │                             #             h_j(p) ≥ 0 (7a) or DCBF (7b), projected warm start
+│   ├── obstacle_sim_config.py    #             shared scene + closed loop
+│   ├── simulate_obst_dist.py     #   7a: entry point, distance constraint
+│   └── simulate_obst_dcbf.py     #   7b: entry point, DCBF (--sweep over γ)
+├── stage8_tube/                  # Stage 8   — robust tube MPC
+│   ├── compute_tube_params.py    #             offline: linear model, sampled W, ancillary K,
+│   │                             #             mRPI support function, tightening, terminal set
+│   ├── ocp_config_tube.py        #             nominal MPC (linear, tightened sets, terminal ellipsoid)
+│   └── simulate_tube.py          #             entry point: tube MPC on the nonlinear plant
+├── stage9_smpc/                  # Stage 9   — stochastic MPC
+│   ├── compute_smpc_params.py    #             offline: Σ_w, feedback K, error covariance Σ_e(k),
+│   │                             #             tightened bounds θ_k, η_k (Gaussian / Cantelli)
+│   ├── ocp_config_smpc.py        #             deterministic-equivalent QP (per-node bounds, soft state rows)
+│   └── simulate_smpc.py          #             entry point: 300 closed loops on the nonlinear plant
 │
-├── ss_target.py                # Stage 3–4 — analytical steady-state target calculator
-├── ocp_config_offsetfree.py    # Stage 3–4 — offset-free NMPC (d̂ as runtime parameter,
-│                               #             DARE terminal cost, soft |ω| box)
-│
-├── sensor_simulator.py         # Stage 4   — y = [p; q; ω] + Gaussian noise
-├── observability_check.py      # Stage 4a  — observability of (F, H) at hover
-├── state_est_ekf.py            # Stage 4a  — augmented EKF
-├── detectability_check.py      # Stage 4b  — LMI detectability certificate → data/mhe_params.npz
-├── ocp_config_mhe.py           # Stage 4b  — acados MHE OCP + certificate I/O
-├── state_est_mhe.py            # Stage 4b  — MHE runtime wrapper (buffers, prior, warm start)
-├── closed_loop_sim_config.py   # Stage 4   — the one closed loop both estimators run in
-├── simulate_ekf.py             # Stage 4a  — entry point: closed loop with the EKF
-├── simulate_mhe.py             # Stage 4b  — entry point: closed loop with the MHE
-├── simulate_compare.py         # Stage 4   — EKF vs MHE from the saved runs
-├── data/mhe_params.npz         # Stage 4b  — verified certificate (P, Q, R, λ, T_min, envelope)
-│
-├── ocp_config_tracking.py      # Stage 5   — tracking NMPC: artificial reference p_a as extra state,
-│                               #             terminal equality x_N = x_a, offset cost V_o
-├── simulate_tracking.py        # Stage 5   — entry point (reference jumps at t = 0, 5, 10 s)
-│
-├── reference_generate.py       # Stage 6   — helix reference (p … snap, yaw), smooth up to snap
-├── reference_flatness.py       # Stage 6   — differential flatness: (p, ψ, derivatives) → (x_r, u_r)
-├── ocp_config_trajectory.py    # Stage 6   — trajectory-tracking NMPC: per-node reference,
-│                               #             quaternion state error, shifted warm start
-├── simulate_trajectory.py      # Stage 6   — entry point (MHE run; --nominal verification)
-│
-├── ocp_config_obstacle.py      # Stage 7   — Stage 6 OCP + soft pillar constraints: distance form
-│                               #             h_j(p) ≥ 0 (7a) or DCBF (7b), projected warm start
-├── obstacle_sim_config.py      # Stage 7   — shared scene + closed loop (helix through three pillars)
-├── simulate_obst_dist.py       # Stage 7a  — entry point: distance constraint
-├── simulate_obst_dcbf.py       # Stage 7b  — entry point: DCBF (--sweep over γ)
-│
-├── compute_tube_params.py      # Stage 8   — offline: linear model, sampled W, ancillary K,
-│                               #             mRPI support function, tightening, terminal set
-├── ocp_config_tube.py          # Stage 8   — nominal MPC (linear, tightened sets, terminal ellipsoid)
-├── simulate_tube.py            # Stage 8   — entry point: tube MPC on the nonlinear plant
-├── data/tube_params.npz        # Stage 8   — offline tube parameters
-│
-├── compute_smpc_params.py      # Stage 9   — offline: Σ_w, feedback K, error covariance Σ_e(k),
-│                               #             tightened bounds θ_k, η_k (Gaussian / Cantelli)
-├── ocp_config_smpc.py          # Stage 9   — deterministic-equivalent QP (per-node bounds, soft state rows)
-├── simulate_smpc.py            # Stage 9   — entry point: 300 closed loops on the nonlinear plant
-├── data/smpc_params.npz        # Stage 9   — offline SMPC parameters
-│
-├── run.sh                      # WSL bridge launcher (Windows Git Bash → WSL2)
+├── data/                         # Offline results read at run time
+│   ├── mhe_params.npz            #   Stage 4b certificate (P, Q, R, λ, T_min, envelope)
+│   ├── tube_params.npz           #   Stage 8 tube parameters
+│   └── smpc_params.npz           #   Stage 9 SMPC parameters
+├── run.sh                        # WSL bridge launcher (Windows Git Bash → WSL2)
 ├── docs/
 │   ├── quadrotor_model.md
 │   ├── stage1_basic_nmpc.md
@@ -139,36 +144,38 @@ quadrotor_3d_nmpc/
 │   ├── stage7b_obst_dcbf.md
 │   ├── stage8_tube.md
 │   └── stage9_smpc.md
-├── results/                    # Figures per stage (tracked)
+├── results/                      # Figures per stage (tracked)
 │   ├── stage1_basic/
 │   ├── stage2a_qih/
 │   ├── stage2b_dare/
 │   ├── stage3_offsetfree/
-│   ├── stage4a_ekf/             # figures + sim_data.npz
-│   ├── stage4b_mhe/             # figures + sim_data.npz
+│   ├── stage4a_ekf/              # figures + sim_data.npz
+│   ├── stage4b_mhe/              # figures + sim_data.npz
 │   ├── stage4_compare/
 │   ├── stage5_tracking/
-│   ├── stage6_trajectory/       # MHE run; nominal/ = verification run
+│   ├── stage6_trajectory/        # MHE run; nominal/ = verification run
 │   ├── stage7a_obst_dist/
 │   ├── stage7b_obst_dcbf/
 │   ├── stage8_tube/
 │   └── stage9_smpc/
-└── c_generated_code/           # acados generated code (gitignored)
+└── build/                        # acados generated code + solver JSON (gitignored)
 ```
 
-The `main` branch holds every stage, all running on the same shared files
-(`quadrotor_3d_model.py`, `plot_utils.py`, and from Stage 2b on `ocp_config_offsetfree.py`).
-Shared files only grow backward-compatibly: new stages add functions or optional keyword
-arguments, so earlier stages keep running unchanged. The tags `stage1` … `stage7` are snapshots
-of the code as it was when each stage was finished. OCP configuration is kept separate from the
-simulation loop, so methods can be swapped and compared side by side.
+Each stage is a Python package; code used by several stages lives in `core/`. A later stage
+imports what it builds on directly from the earlier stage (e.g. Stage 7 extends the Stage 6 OCP,
+Stage 9 reuses the Stage 8 coordinates), so the imports show the dependencies between stages.
+Shared code only grows backward-compatibly: new stages add functions or optional keyword
+arguments, so earlier stages keep running unchanged. The tags `stage1` … `stage9` are snapshots
+of the code as it was when each stage was finished (flat layout, all files in the root). OCP
+configuration is kept separate from the simulation loop, so methods can be swapped and compared
+side by side.
 
 ## Toolchain
 
 - **acados** (Python interface, `acados_template`) — OCP solver for the NMPC and the MHE
 - **CasADi** 3.7.2 — symbolic dynamics and automatic differentiation
 - **NumPy** 2.x, **SciPy** — offline computations (CARE, DARE, Lyapunov equations)
-- **CVXPY** + **MOSEK** — SDP for the Stage 4b certificate (only `detectability_check.py`)
+- **CVXPY** + **MOSEK** — SDP for the Stage 4b certificate (only `stage4_estimation/detectability_check.py`)
 - **WSL2 / Ubuntu** — acados C libraries and Python venv (`~/acados_env`)
 - **VS Code** on Windows for editing; execution routed through the WSL bridge
 
@@ -178,25 +185,28 @@ The project files live on the Windows drive; acados runs in WSL2. `run.sh` handl
 
 ```bash
 # From Windows Git Bash, in the project directory (main branch)
-./run.sh simulate_basic.py            # Stage 1               → results/stage1_basic/
-./run.sh simulate_qih.py              # Stage 2a              → results/stage2a_qih/
-./run.sh simulate_dare.py             # Stage 2b              → results/stage2b_dare/
-./run.sh simulate_offsetfree.py       # Stage 3               → results/stage3_offsetfree/
-./run.sh simulate_ekf.py              # Stage 4a closed loop  → results/stage4a_ekf/
-./run.sh simulate_mhe.py              # Stage 4b closed loop  → results/stage4b_mhe/
-./run.sh simulate_compare.py          # EKF vs MHE            → results/stage4_compare/
-./run.sh simulate_tracking.py         # Stage 5               → results/stage5_tracking/
-./run.sh simulate_trajectory.py       # Stage 6 (MHE)         → results/stage6_trajectory/
-./run.sh simulate_trajectory.py --nominal   # Stage 6 check   → results/stage6_trajectory/nominal/
-./run.sh simulate_obst_dist.py        # Stage 7a              → results/stage7a_obst_dist/
-./run.sh simulate_obst_dcbf.py [--sweep]    # Stage 7b        → results/stage7b_obst_dcbf/
-./run.sh compute_tube_params.py       # Stage 8 offline       → data/tube_params.npz
-./run.sh simulate_tube.py             # Stage 8               → results/stage8_tube/
-./run.sh compute_smpc_params.py       # Stage 9 offline       → data/smpc_params.npz
-./run.sh simulate_smpc.py             # Stage 9 (300 runs)    → results/stage9_smpc/
+./run.sh stage1_basic/simulate_basic.py                 # Stage 1              → results/stage1_basic/
+./run.sh stage2_terminal/simulate_qih.py                # Stage 2a             → results/stage2a_qih/
+./run.sh stage2_terminal/simulate_dare.py               # Stage 2b             → results/stage2b_dare/
+./run.sh stage3_offsetfree/simulate_offsetfree.py       # Stage 3              → results/stage3_offsetfree/
+./run.sh stage4_estimation/simulate_ekf.py              # Stage 4a closed loop → results/stage4a_ekf/
+./run.sh stage4_estimation/simulate_mhe.py              # Stage 4b closed loop → results/stage4b_mhe/
+./run.sh stage4_estimation/simulate_compare.py          # EKF vs MHE           → results/stage4_compare/
+./run.sh stage5_tracking/simulate_tracking.py           # Stage 5              → results/stage5_tracking/
+./run.sh stage6_trajectory/simulate_trajectory.py       # Stage 6 (MHE)        → results/stage6_trajectory/
+./run.sh stage6_trajectory/simulate_trajectory.py --nominal  # Stage 6 check   → results/stage6_trajectory/nominal/
+./run.sh stage7_obstacle/simulate_obst_dist.py          # Stage 7a             → results/stage7a_obst_dist/
+./run.sh stage7_obstacle/simulate_obst_dcbf.py [--sweep]     # Stage 7b        → results/stage7b_obst_dcbf/
+./run.sh stage8_tube/compute_tube_params.py             # Stage 8 offline      → data/tube_params.npz
+./run.sh stage8_tube/simulate_tube.py                   # Stage 8              → results/stage8_tube/
+./run.sh stage9_smpc/compute_smpc_params.py             # Stage 9 offline      → data/smpc_params.npz
+./run.sh stage9_smpc/simulate_smpc.py                   # Stage 9 (300 runs)   → results/stage9_smpc/
 
-./run.sh observability_check.py       # observability at hover
-./run.sh detectability_check.py       # re-derive the MHE certificate (needs cvxpy + MOSEK)
+./run.sh stage4_estimation/observability_check.py       # observability at hover
+./run.sh stage4_estimation/detectability_check.py       # re-derive the MHE certificate (needs cvxpy + MOSEK)
+
+# Scripts run as modules from the repo root (they import each other by package name);
+# run.sh turns stageN_x/script.py into -m stageN_x.script.
 
 # The code as it was at the end of a stage: check out its tag, e.g.
 git checkout stage3 && ./run.sh simulate_offsetfree.py   # back with: git checkout main
@@ -210,8 +220,8 @@ Or directly inside WSL:
 ```bash
 source ~/acados_env/bin/activate
 cd /mnt/e/WorkSpace/GitHub/quadrotor_3d_nmpc
-python simulate_ekf.py
+python -m stage4_estimation.simulate_ekf
 ```
 
-The first solver build compiles C code (about 30 s); `c_generated_code/` is regenerated on later
+The first solver build compiles C code (about 30 s) into `build/`, which is regenerated on later
 runs and is gitignored.

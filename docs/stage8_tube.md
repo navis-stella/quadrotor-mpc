@@ -27,7 +27,7 @@ nonlinear robust MPC theory is used.
 | Horizon | $N = 60$, $T = 3$ s |
 | Solver | acados `SQP`, exact Hessian, `PARTIAL_CONDENSING_HPIPM`, `DISCRETE` dynamics |
 | Offline | `compute_tube_params.py` → `data/tube_params.npz` |
-| Entry point | `./run.sh simulate_tube.py` → `results/stage8_tube/` |
+| Entry point | `./run.sh stage8_tube/simulate_tube.py` → `results/stage8_tube/` |
 
 ---
 
@@ -415,10 +415,10 @@ using a linear tube for a nonlinear plant. Tubes that scale with the state (nonl
 | `plot_utils.py` | `plot_tube_states()`, `plot_tube_inputs()`, `plot_tube_certificate()` (new) |
 
 ```bash
-./run.sh compute_tube_params.py             # → data/tube_params.npz (≈ 12 s)
-./run.sh compute_tube_params.py --check     # self-test: plant, support function, terminal set
-./run.sh simulate_tube.py                   # → results/stage8_tube/
-QUAD_PLOTS=none ./run.sh simulate_tube.py   # save only, no windows
+./run.sh stage8_tube/compute_tube_params.py  # → data/tube_params.npz (≈ 12 s)
+./run.sh stage8_tube/compute_tube_params.py --check  # self-test: plant, support function, terminal set
+./run.sh stage8_tube/simulate_tube.py       # → results/stage8_tube/
+QUAD_PLOTS=none ./run.sh stage8_tube/simulate_tube.py  # save only, no windows
 ```
 
 ## References

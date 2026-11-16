@@ -19,7 +19,7 @@ no estimator.
 | Horizon | $N = 20$, $T = 1$ s, $T_s = 0.05$ s |
 | Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4 |
 | Scenario | three reference jumps at $t = 0, 5, 10$ s, the last one outside the room |
-| Entry point | `./run.sh simulate_tracking.py` → `results/stage5_tracking/` |
+| Entry point | `./run.sh stage5_tracking/simulate_tracking.py` → `results/stage5_tracking/` |
 
 ---
 
@@ -253,6 +253,6 @@ cost ($T = 50$) and no attitude or rate limits produces.
 | `plot_utils.py` | `plot_artificial_reference()` (new), the other plots are shared with Stages 1–4 |
 
 ```bash
-./run.sh simulate_tracking.py          # → results/stage5_tracking/
-QUAD_PLOTS=none ./run.sh simulate_tracking.py   # save only, no windows
+./run.sh stage5_tracking/simulate_tracking.py  # → results/stage5_tracking/
+QUAD_PLOTS=none ./run.sh stage5_tracking/simulate_tracking.py  # save only, no windows
 ```

@@ -190,8 +190,8 @@ reached $5$ rad/s.
 
 ```bash
 git checkout stage4
-./run.sh observability_check.py    # rank check at hover
-./run.sh simulate_ekf.py           # → results/stage4a_ekf/
+./run.sh stage4_estimation/observability_check.py  # rank check at hover
+./run.sh stage4_estimation/simulate_ekf.py  # → results/stage4a_ekf/
 ```
 
 ## 4. Scenario
