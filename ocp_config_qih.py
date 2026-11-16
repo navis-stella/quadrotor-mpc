@@ -23,7 +23,7 @@ Observation from simulation results:
 
 Cost structure (NONLINEAR_LS):
     Stage:     || [x; u] - [x_ref; u_ref] ||^2_W           (17-dim)
-    Terminal:  || x_N - x_ref ||^2_{P_lyap}                 (13-dim)
+    Terminal:  || x_N - x_ref ||^2_{P_lyap}                (13-dim)
     + soft penalty on terminal set violation
 
 Constraints:
