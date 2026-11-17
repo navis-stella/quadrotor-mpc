@@ -171,8 +171,7 @@ $q_w$. There is no terminal constraint.
 so the OCP minimizes $`\sum_k T_s\, \ell(x_k, u_k) + x_N^\top W_e x_N`$. The cost-to-go of exactly
 this sum is the DARE solution for the weights $(T_s Q, T_s R)$, which is $T_s$ times the
 solution for $(Q, R)$. With unscaled weights the terminal cost would be $1/T_s = 20$ times the
-tail it stands for. (The 13-state version of this stage had that factor; stages not yet
-migrated still use `compute_dare_terminal_cost` without it.)
+tail it stands for. (The 13-state version of this stage, tag `rigid-body`, had that factor.)
 
 **Why it works without a terminal set.** $x^\top P_{\text{lqr}} x$ is the exact infinite-horizon
 cost of the linearized system under the LQR gain, so it is a control Lyapunov function near

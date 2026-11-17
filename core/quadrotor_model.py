@@ -4,14 +4,12 @@ quadrotor_model.py — All Stages Full 3D Quadrotor Model (Quaternion)
 Single source of the physics for every stage. Contains:
   - Physical parameters, dimensions, motor mixer, operating envelope
   - Quaternion utilities                (numpy + CasADi)
-  - Nominal model                       (Stage 1–2 MPC prediction model)
-  - Disturbance model                   (Stage 3–4 MPC prediction model,
-                                          plant of every stage)
-  - Augmented model z = [x; d]          (EKF: CasADi functions,
-                                          MHE: acados model with process noise)
+  - Rigid-body dynamics ẋ = f(x, u, d)   (thrusts u as input — the core that
+                                          every model below builds on; also the
+                                          flatness reference of Stage 6)
   - Measurement model y = [p; q; ω]     (sensor, EKF, MHE, observability)
-  - Hover point + linearization         (QIH / DARE terminal cost, observability)
-  - AcadosSimSolver plant               (one plant for every stage)
+  - Rigid-body hover linearization      (block of the thrust-lag linearization,
+                                          core/motor_check)
   - Tracking model x̃ = [x; f; p_a]       (Stage 5 tracking MPC on the motor
                                           model: artificial reference as
                                           constant extra state)
@@ -19,6 +17,11 @@ Single source of the physics for every stage. Contains:
                                           [x; f] with ḟ = (f_cmd − f)/τ_m,
                                           plant [x; Ω] with rotor-speed loop
                                           and f = k_f Ω²; check: core/motor_check)
+  - Augmented model z = [x; f; d]       (EKF: CasADi step + Jacobian,
+                                          MHE: acados model with process noise)
+
+Every stage runs on the motor dynamics. The 13-state models with the
+thrusts as direct input are in the git tag `rigid-body`.
 
 State (13):
     x = [px, py, pz, vx, vy, vz, qw, qx, qy, qz, p, q, r]
@@ -31,8 +34,10 @@ State (13):
     Note on naming: 'q' as pitch rate (aerospace standard) is separate from
     'qw, qx, qy, qz' quaternion components. Context makes them unambiguous.
 
-Input (4):
+Input (4) of the rigid body:
     u = [f1, f2, f3, f4]   individual motor thrusts [N]
+    (the motor models below take the thrust COMMANDS f_cmd instead and carry
+     the thrusts f — MPC model — or rotor speeds Ω — plant — as 4 more states)
 
 Motor layout (+ configuration, top view, z-up):
 
@@ -65,10 +70,10 @@ Disturbance (Stage 3 onward):
                                  covers: CoG offset (parasitic torques)
 
     Where d lives in each component:
-        MPC prediction  create_disturbance_model()   p = d̂        (parameter)
-        Plant           create_disturbance_plant()   p = d_true   (parameter)
-        EKF             get_augmented_dynamics()     z = [x; d], ḋ = 0
-        MHE             create_mhe_model()           z = [x; d], ż = f_aug + w
+        MPC prediction  create_thrust_lag_disturbance_model()   p = d̂        (parameter)
+        Plant           create_rotor_plant()                    p = d_true   (parameter)
+        EKF             get_thrust_lag_augmented_step()         z = [x; f; d], ḋ = 0
+        MHE             create_thrust_lag_mhe_model()           z = [x; f; d], ż = f_aug + w
 
 Measurement (Stage 4):
     y = [px, py, pz, qw, qx, qy, qz, p, q, r]   (NY = 10)
@@ -102,9 +107,8 @@ f_hover = m * g / 4.0    # [N] hover thrust per motor ≈ 2.45 N
 NX = 13        # 3 pos + 3 vel + 4 quat + 3 angular vel
 NU = 4         # motor thrusts
 ND = 6         # 3 force (world) + 3 torque (body)
-NZ = NX + ND   # 19 — augmented state z = [x; d]   (EKF and MHE)
+NZ = NX + ND   # 19 — rigid body + disturbance [x; d] (measurement self-check)
 NY = 10        # 3 pos + 4 quat + 3 angular vel  —  y = [p; q; ω]
-NW = NZ        # 19 — MHE process noise, additive on every derivative of z
 NM = 4         # motor states (thrusts f in the MPC model, rotor speeds Ω in the plant)
 NXM = NX + NM  # 17 — motor-dynamics state [x; f]  (plant: [x; Ω])
 
@@ -290,135 +294,6 @@ def _build_f_expl(s, d=None):
     )
 
 
-def _build_augmented():
-    """
-    Augmented dynamics shared by the EKF and the MHE:
-
-        z = [x(13); d(6)],     ż = f_aug(z, u) = [ f(x, u, d) ; 0 ]
-
-    ḋ = 0 is the constant-disturbance assumption. Both estimators
-    discretize exactly this expression — the EKF by RK4 + Euler-linearized
-    covariance, the MHE by acados ERK with process noise w added.
-    """
-    s = _build_core_symbols()
-    d = ca.SX.sym('d', ND)
-    z = ca.vertcat(s['x'], d)
-    z_dot = ca.vertcat(_build_f_expl(s, d), ca.SX.zeros(ND))
-    return z, s['u'], z_dot
-
-
-# ═════════════════════════════════════════════════════════════════
-# Nominal Model  (Stage 1–2 MPC prediction model)
-# ═════════════════════════════════════════════════════════════════
-def create_nominal_model() -> AcadosModel:
-    """
-    Nominal quadrotor dynamics ẋ = f(x, u), d = 0, no parameters.
-
-    Used by the Stage 1–2 OCPs (ocp_config_basic / _qih / _dare) and by the
-    QIH Lipschitz check (compute_qih_params). Same expression as the
-    disturbance model with d = 0, so the plant of those stages is simply
-    create_disturbance_plant() with p left at zero — no model mismatch.
-    """
-    s = _build_core_symbols()
-
-    model             = AcadosModel()
-    model.name        = 'quadrotor'
-    model.x           = s['x']
-    model.u           = s['u']
-    model.xdot        = ca.SX.sym('xdot', NX)
-    model.f_expl_expr = _build_f_expl(s)
-
-    return model
-
-
-# ═════════════════════════════════════════════════════════════════
-# Disturbance as Runtime Parameter  (MPC prediction model + plant)
-# ═════════════════════════════════════════════════════════════════
-def create_disturbance_model() -> AcadosModel:
-    """
-    Quadrotor dynamics with disturbance forces/torques as runtime parameters.
-
-    Used by:
-      - MPC solver:  set p = d̂  (estimate from EKF / MHE) at each shooting node
-      - Plant sim:   set p = d_true (known external disturbance for testing)
-
-    The state dimension stays NX = 13 — disturbances are NOT optimized.
-
-    Parameter vector:
-        p = [d_fx, d_fy, d_fz, d_tx, d_ty, d_tz]
-    """
-    s = _build_core_symbols()
-    d = ca.SX.sym('d', ND)
-
-    model             = AcadosModel()
-    model.name        = 'quadrotor_disturb'
-    model.x           = s['x']
-    model.u           = s['u']
-    model.p           = d
-    model.xdot        = ca.SX.sym('xdot', NX)
-    model.f_expl_expr = _build_f_expl(s, d)
-
-    return model
-
-
-# ═════════════════════════════════════════════════════════════════
-# Augmented Model  (Stage 4 estimators)
-# ═════════════════════════════════════════════════════════════════
-def get_augmented_dynamics():
-    """
-    Augmented dynamics as CasADi functions for the EKF.
-
-    Returns:
-        f_aug:  CasADi Function  ż = f_aug(z, u)        (19,)
-        F_func: CasADi Function  ∂f_aug/∂z at (z, u)    (19×19)
-
-    Usage in EKF:
-        z_dot_val = f_aug(z_hat, u)                    # prediction
-        F_val     = F_func(z_hat, u)                   # Jacobian for covariance
-    """
-    z, u, z_dot = _build_augmented()
-    f_aug  = ca.Function('f_aug', [z, u], [z_dot], ['z', 'u'], ['z_dot'])
-    F_func = ca.Function('F_aug', [z, u], [ca.jacobian(z_dot, z)],
-                         ['z', 'u'], ['F'])
-    return f_aug, F_func
-
-
-def create_mhe_model() -> AcadosModel:
-    """
-    Augmented dynamics as an acados model for the Lyapunov MHE.
-
-        ż = f_aug(z, u_rotor) + w,     z ∈ R^19,  w ∈ R^19 (NW)
-
-    The MHE optimizes over z₀ and the process noise w, so the acados roles
-    are swapped with respect to the MPC:
-
-        model.x = z = [x(13); d(6)]
-        model.u = w         process noise — the MHE's decision variable
-        model.p = u_rotor   known rotor thrusts, set from the control history
-                            (ocp_config_mhe augments model.p further with the
-                             discount exponent, node flags, prior and y_meas)
-
-    w_d makes d a random walk: the MHE pays 2‖w_d‖²_Q for every change of d̂,
-    and a constant d costs nothing once it has been learned.
-
-    Why this is certifiable (detectability_check): d enters f LINEARLY with
-    constant coefficients (d_f/m in v̇, I⁻¹d_τ in ω̇), so ∂f/∂z depends only on
-    (q, ω, T_total) — the vertex reduction of the LMI applies.
-    """
-    z, u, z_dot = _build_augmented()
-    w = ca.SX.sym('w', NW)
-
-    model             = AcadosModel()
-    model.name        = 'quadrotor_mhe'
-    model.x           = z
-    model.u           = w              # MHE 'input' = process noise
-    model.p           = u              # rotor thrusts as known parameter
-    model.xdot        = ca.SX.sym('zdot', NZ)
-    model.f_expl_expr = z_dot + w
-
-    return model
-
-
 # ═════════════════════════════════════════════════════════════════
 # Measurement Model  (Stage 4)
 # ═════════════════════════════════════════════════════════════════
@@ -426,16 +301,17 @@ def measurement_expr(z_sym):
     """
     y = h(z) = [p; q; ω] as a CasADi expression — the selection z[IDX_Y].
 
-    Works for the 13-dim state and the 19-dim augmented state (only the
-    first 13 entries are read; d is not measured). Used inside the MHE cost
-    and the detectability LMI.
+    Works for any state that starts with x (13): [x; d], [x; f; d] — only the
+    first 13 entries are read; f and d are not measured. Used inside the MHE
+    cost and the detectability LMI.
     """
     return ca.vertcat(*[z_sym[int(i)] for i in IDX_Y])
 
 
 def get_measurement_function():
     """
-    Measurement function for the augmented state z (19).
+    Measurement function for z = [x; d] (19) — the sensor self-check
+    (core/sensor_simulator).
 
     Stage 4 assumption: position p, quaternion q, and angular velocity ω
     are directly measured (idealized outer pose source, mocap-equivalent).
@@ -452,23 +328,11 @@ def get_measurement_function():
     return h_func, H_z
 
 
-def project_measurement(y: np.ndarray) -> np.ndarray:
-    """
-    Best guess of z from a single measurement — the common initial prior
-    z̄₀ of both estimators:
-
-        p, q, ω ← measured,    v ← 0,    d ← 0
-    """
-    z = np.zeros(NZ)
-    z[IDX_Y] = y
-    return z
-
-
 # ─────────────────────────────────────────────────────────────────
 # Hover Point + Linearization
 # ─────────────────────────────────────────────────────────────────
 def hover_point():
-    """(z_hover (19), u_hover (4)) — rest at the origin, level, d = 0."""
+    """(z_hover (19) = [x; d], u_hover (4)) — rest at the origin, level, d = 0."""
     z_hover = np.zeros(NZ)
     z_hover[6] = 1.0                    # qw = 1 (identity quaternion)
     return z_hover, np.full(NU, f_hover)
@@ -476,8 +340,9 @@ def hover_point():
 
 def get_hover_linearization():
     """
-    Continuous-time linearization of the nominal dynamics (d = 0) at hover,
-    differentiated from the same CasADi model the solvers use.
+    Continuous-time linearization of the rigid-body dynamics (thrusts as
+    input, d = 0) at hover — the body block of
+    get_thrust_lag_hover_linearization (checked in core/motor_check).
 
     Key couplings at hover (quaternion version):
         qy → acceleration in x    (A[3,8]  =  2g)
@@ -496,36 +361,6 @@ def get_hover_linearization():
     z_hover, u_hover = hover_point()
     A_c, B_c = jac(z_hover[:NX], u_hover)
     return A_c.full(), B_c.full()
-
-
-# ─────────────────────────────────────────────────────────────────
-# AcadosSim Plant
-# ─────────────────────────────────────────────────────────────────
-def create_disturbance_plant(Ts: float) -> AcadosSimSolver:
-    """
-    AcadosSimSolver plant WITH disturbance: one call advances by Ts.
-
-    Usage:
-        plant.set('x', x_current)
-        plant.set('u', u_current)
-        plant.set('p', d_true)          # ← set true disturbance
-        plant.solve()
-        x_next = quat_normalize(plant.get('x'))
-
-    The disturbance is integrated continuously within each step,
-    not applied as a discrete impulse — physically correct.
-
-    Stages 1–2 never call plant.set('p', ...): p stays at its default
-    zero and this is the nominal plant of create_nominal_model().
-    """
-    sim = AcadosSim()
-    sim.model = create_disturbance_model()
-    sim.solver_options.T = Ts
-    sim.solver_options.integrator_type = 'ERK'
-    sim.solver_options.num_stages = 4
-    sim.parameter_values = np.zeros(ND)     # dimension must be known
-    sim.code_export_directory = build_path('c_generated_code')
-    return AcadosSimSolver(sim, json_file=build_path(f'{sim.model.name}_sim.json'))
 
 
 # ═════════════════════════════════════════════════════════════════
@@ -606,8 +441,8 @@ def create_tracking_model() -> AcadosModel:
 # ═════════════════════════════════════════════════════════════════
 # Motor Dynamics  (thrust command as input, rotor lag as states)
 # ═════════════════════════════════════════════════════════════════
-# The models above take the thrusts f as the input: the rotors would follow
-# a command instantly. On a real drone the controller sends a thrust command
+# The rigid-body dynamics above take the thrusts f as the input: the rotors
+# would follow a command instantly. On a real drone the controller sends a thrust command
 # f_cmd, the ESC tracks the matching rotor speed, and the thrust follows
 # with the speed-loop lag. Two views of that lag:
 #
@@ -677,8 +512,8 @@ def create_thrust_lag_model() -> AcadosModel:
 
         state  [x (13); f (4)] = 17,    input  f_cmd (4)
 
-    Counterpart of create_nominal_model(). Input bounds for the OCP:
-    F_MIN ≤ f_cmd ≤ F_MAX (idle speed > 0, full throttle).
+    Input bounds for the OCP: F_MIN ≤ f_cmd ≤ F_MAX (idle speed > 0, full
+    throttle).
     """
     s = _build_thrust_lag_symbols()
 
@@ -695,8 +530,8 @@ def create_thrust_lag_model() -> AcadosModel:
 def create_thrust_lag_disturbance_model() -> AcadosModel:
     """
     Motor-dynamics MPC model with the disturbance d (6) as runtime parameter
-    p — counterpart of create_disturbance_model(). The disturbance acts on
-    the body (forces, torques), not on the motors.
+    p. The disturbance acts on the body (forces, torques), not on the
+    motors.
     """
     s = _build_thrust_lag_symbols()
     d = ca.SX.sym('d', ND)
@@ -781,9 +616,8 @@ def create_rotor_plant(Ts: float) -> AcadosSimSolver:
         plant.solve()
         x_plant = quat_normalize(plant.get('x'))
 
-    Counterpart of create_disturbance_plant(); the controller's input is now
-    a COMMAND, the thrust on the body lags behind it. 4 RK4 substeps per call
-    resolve τ_m = 30 ms at Ts = 50 ms.
+    The controller's input is a COMMAND, the thrust on the body lags behind
+    it. 4 RK4 substeps per call resolve τ_m = 30 ms at Ts = 50 ms.
     """
     sim = AcadosSim()
     sim.model = _build_rotor_plant_model()
@@ -829,7 +663,7 @@ def _build_thrust_lag_augmented():
 def get_thrust_lag_augmented_dynamics():
     """
     Continuous augmented thrust-lag dynamics as CasADi functions
-    (counterpart of get_augmented_dynamics; observability check):
+    (observability check):
 
         f_aug(z, u) = ż  (23,),     F_func(z, u) = ∂ż/∂z  (23×23)
     """
@@ -872,8 +706,7 @@ def get_thrust_lag_augmented_step(Ts: float, n_steps: int = 2):
 
 def create_thrust_lag_mhe_model() -> AcadosModel:
     """
-    Augmented thrust-lag dynamics as an acados model for the Lyapunov MHE
-    (counterpart of create_mhe_model):
+    Augmented thrust-lag dynamics as an acados model for the Lyapunov MHE:
 
         ż = f_aug(z, f_cmd) + w,     z ∈ R^23,  w ∈ R^23 (additive on every derivative)
 
@@ -881,9 +714,12 @@ def create_thrust_lag_mhe_model() -> AcadosModel:
         model.u = w         process noise — the MHE's decision variable
         model.p = f_cmd     known thrust commands (ocp_config_mhe augments model.p)
 
-    Certifiable for the same reason as the 13-state model: d enters linearly
-    with constant coefficients, the commands enter ḟ linearly with constant
-    coefficients, and ∂f/∂z depends only on (q, ω, Σf).
+    w_d makes d a random walk: the MHE pays for every change of d̂, and a
+    constant d costs nothing once it has been learned.
+
+    Certifiable (detectability_check): d enters linearly with constant
+    coefficients, the commands enter ḟ linearly with constant coefficients,
+    and ∂f/∂z depends only on (q, ω, f).
     """
     z, u, z_dot = _build_thrust_lag_augmented()
     w = ca.SX.sym('w', NZM)
