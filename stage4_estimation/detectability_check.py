@@ -108,8 +108,6 @@ Design order (check_detectability) — purely continuous time, no Ts:
 Output:
     data/mhe_params.npz with the CT quantities
     (P, Q, R, kappa, lam, T_hor_min, envelope, margins).
-    (The 13-state certificate that Stage 6 still uses is the frozen file
-    data/mhe_params_rigid.npz; this script only certifies the motor model.)
 
 Ported from the MATLAB IOSS verification (YALMIP + MOSEK) to
 CVXPY + MOSEK / CLARABEL / SCS.

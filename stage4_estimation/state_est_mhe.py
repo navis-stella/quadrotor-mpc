@@ -12,8 +12,6 @@ Model sources (quadrotor_model) — shared with the Stage 4a EKF:
     - Augmented dynamics  (create_thrust_lag_mhe_model = f_aug + process noise w)
     - Measurement model   (measurement_expr)
 
-Transitional (until Stage 6 migrates): model='rigid' runs the 13-state MHE
-(z = [x; d], 19) on data/mhe_params_rigid.npz.
 
 Tuning: none by hand. P, Q, R, the decay κ and the minimum horizon T_min
 come from the i-iIOSS certificate (detectability_check.py); load_mhe_params
@@ -43,10 +41,10 @@ from collections import deque
 
 import numpy as np
 
-from core.quadrotor_model             import quat_normalize, f_hover, NU, NY
+from core.quadrotor_model             import quat_normalize, f_hover, NU, NY, NZM
 from stage4_estimation.ocp_config_mhe import (
     export_drone_mhe_solver, load_mhe_params, pack_mhe_param,
-    MHE_PARAMS_PATH, MHE_PARAMS_RIGID_PATH, MHE_MODELS, HORIZON_FACTOR,
+    MHE_PARAMS_PATH, HORIZON_FACTOR,
 )
 
 
@@ -56,13 +54,11 @@ class MovingHorizonEstimator:
 
     Args:
         Ts:             sample time [s]
-        z0:             initial prior z̄₀ (23,), or (19,) for model='rigid'
-        cert_path:      i-iIOSS certificate (detectability_check.py);
-                        default by model
+        z0:             initial prior z̄₀ (23,)
+        cert_path:      i-iIOSS certificate (detectability_check.py)
         horizon_factor: N = ⌈c·T_min/Ts⌉, c > 1
         omega_box: impose the certified state box (8c): |ω̂| ≤ ω_max
-                   (motor model: and F_MIN ≤ f̂ᵢ ≤ F_MAX)
-        model:     'motor' (Stage 4) or 'rigid' (transitional, Stage 6)
+                   and F_MIN ≤ f̂ᵢ ≤ F_MAX
     """
 
     name = 'MHE'
@@ -70,24 +66,20 @@ class MovingHorizonEstimator:
     def __init__(self,
                  Ts:        float,
                  z0:        np.ndarray,
-                 cert_path:      str   = None,
+                 cert_path:      str   = MHE_PARAMS_PATH,
                  horizon_factor: float = HORIZON_FACTOR,
                  omega_box:      bool  = True,
-                 model:          str   = 'motor',
                  **solver_kw):
-        if cert_path is None:
-            cert_path = MHE_PARAMS_PATH if model == 'motor' else MHE_PARAMS_RIGID_PATH
         self.Ts   = Ts
-        self.nz   = nz = MHE_MODELS[model][0]
-        self.cert = load_mhe_params(cert_path, Ts=Ts, horizon_factor=horizon_factor,
-                                    model=model)
+        self.nz   = nz = NZM
+        self.cert = load_mhe_params(cert_path, Ts=Ts, horizon_factor=horizon_factor)
         self.N    = N = self.cert['N']
 
         self.solver = export_drone_mhe_solver(
             ts=Ts, lam=self.cert['lam'], N=N,
             P=self.cert['P'], R=self.cert['R'], Q=self.cert['Q'],
             omega_max=self.cert['omega_max'] if omega_box else None,
-            model_kind=model, **solver_kw)
+            **solver_kw)
 
         z0 = quat_normalize(np.asarray(z0, dtype=float).copy())
         assert z0.shape == (nz,), f'z0 shape {z0.shape}'
@@ -112,7 +104,7 @@ class MovingHorizonEstimator:
     def step(self, y: np.ndarray, u_prev: np.ndarray = None) -> np.ndarray:
         """
         One sample: store u_{k-1}, solve over the window y_{k-n..k-1},
-        store y_k for the next call. Returns ẑ_k (23,), (19,) for model='rigid'.
+        store y_k for the next call. Returns ẑ_k (23,).
         """
         if u_prev is not None:
             self.u_buf.append(np.asarray(u_prev, dtype=float))
