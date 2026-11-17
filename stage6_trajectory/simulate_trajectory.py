@@ -5,38 +5,39 @@ The quadrotor flies the helix of reference_generate.py — take-off hop, spiral-
 out, constant-rate climb (R = 2 m, 5 m climb over 3 turns, 2 m/s) — with
 the Stage 4b measurement and estimator:
 
-    plant        no disturbance  (D_TRUE = 0, see there)
-    measurement  y = [p; q; ω] with mocap noise  (sensor_simulator)
-    estimator    certified Lyapunov MHE  ẑ = [x̂; d̂]   (state_est_mhe,
-                 unchanged from Stage 4b; needs data/mhe_params.npz)
-    controller   trajectory-tracking NMPC         (ocp_config_trajectory)
+    plant        rotor-speed plant [x; Ω], no disturbance  (D_TRUE = 0, see there)
+    measurement  y = [p; q; ω] with mocap noise  (sensor_simulator; f not measured)
+    estimator    certified Lyapunov MHE  ẑ = [x̂; f̂; d̂]   (state_est_mhe,
+                 motor model of Stage 4b; needs data/mhe_params.npz)
+    controller   trajectory-tracking NMPC on the thrust-lag model (ocp_config_trajectory)
 
-    The MHE certificate holds for any attitude, 0 ≤ T_total ≤ 4·F_MAX and
+    The MHE certificate holds for any attitude, 4·F_MIN ≤ Σf ≤ 4·F_MAX and
     |ωᵢ| ≤ OMEGA_MAX; the helix needs |ω_r| ≤ 0.55 rad/s, and the MPC's soft
-    |ωᵢ| ≤ OMEGA_MPC = 0.9·OMEGA_MAX keeps the plant inside the envelope.
+    |ωᵢ| ≤ OMEGA_MPC_MOTOR = 0.85·OMEGA_MAX keeps the plant inside the envelope.
 
 Loop (Ts = 0.05 s, MPC horizon 1 s, N = 20):
 
     y_k             = sensor(x_k)
     ẑ_k             = MHE(y_k, u_{k−1})   (prediction form: uses y up to k−1)
     (X_r, U_r)_k    = flatness( helix(t_k + i·Ts), d̂_k ),  i = 0..N
+                      X_r = [x_r; f_r], U_r = f_r + τ_m·ḟ_r  (motor_horizon)
     u_k             = MPC(x̂_k, X_r, U_r, d̂_k)           (shifted warm start)
-    x_{k+1}         = plant(x_k, u_k, d_true)
+    x_{k+1}         = plant(x_k, u_k, d_true)           (5 substeps of Ts/5)
 
     d̂ (≈ 0 here, but still estimated) enters the flatness map too: the
     reference attitude and thrust are those that fly the helix UNDER the
     estimated disturbance, so the reference stays a trajectory of the
     prediction model f(·, ·, d̂).
 
---nominal: d_true = 0, x̂ = x (full state feedback), d̂ = 0 — the tracking
-MPC alone, as a check of the controller without estimation.
+--nominal: d_true = 0, x̂ = [x; k_f Ω²] (full state feedback), d̂ = 0 — the
+tracking MPC alone, as a check of the controller without estimation.
 
 Imports:
     reference_generate.py     → HelixReference (p, v, a, jerk, snap, yaw)
-    reference_flatness.py     → flat_to_state_input  (→ x_r, u_r under d̂)
+    reference_flatness.py     → motor_horizon  (→ [x_r; f_r], f_cmd,r under d̂)
     ocp_config_trajectory.py  → create_solver() + runtime helpers
-    state_est_mhe.py          → MovingHorizonEstimator  (Stage 4b)
-    stage4 closed_loop.py     → OMEGA_MPC  (Stage 4 value)
+    state_est_mhe.py          → MovingHorizonEstimator  (Stage 4b, motor model)
+    stage4 closed_loop.py     → OMEGA_MPC_MOTOR  (Stage 4 value)
 
 Run:  python -m stage6_trajectory.simulate_trajectory [--nominal]
       → results/stage6_trajectory/ (nominal: results/stage6_trajectory/nominal/)
@@ -49,12 +50,15 @@ import argparse
 import time
 import numpy as np
 
-from core.quadrotor_model                      import (create_disturbance_plant, quat_normalize,
-                                                       project_measurement, OMEGA_MAX, F_MAX, NX, NU, ND, NY)
+from core.quadrotor_model                      import (create_rotor_plant, rotor_to_thrust_state,
+                                                       thrust_to_rotor_state, thrust_from_rotor,
+                                                       quat_normalize, project_thrust_lag_measurement,
+                                                       OMEGA_MAX, F_MIN, F_MAX, NX, NXM, NU, ND, NY)
 from stage6_trajectory.reference_generate      import HelixReference
-from stage6_trajectory.reference_flatness      import flat_to_state_input
+from stage6_trajectory.reference_flatness      import motor_horizon
 import stage6_trajectory.ocp_config_trajectory as traj
-from stage4_estimation.closed_loop             import OMEGA_MPC
+from stage4_estimation.closed_loop             import OMEGA_MPC_MOTOR
+from stage1_basic.simulate_basic               import N_SUB
 from core.sensor_simulator                     import SensorSimulator, MOCAP_NOISE_STD
 from stage4_estimation.state_est_mhe           import MovingHorizonEstimator
 from core.plot_utils                           import (plot_states, plot_inputs, plot_3d_trajectory,
@@ -91,37 +95,39 @@ PHASES   = [(P.T_hop, 'spiral'), (T_CRUISE, 'cruise')]
 # ─────────────────────────────────────────────────────────────────
 def simulate(nominal: bool = False, sensor_seed: int = 42) -> dict:
     """
-    Returns dict with X (n+1, 13), X_hat (n, 13), D_hat (n, 6), D_true (n, 6),
-    X_r (n, 13), U_r (n, 4), U (n, 4), status (n,), T_est (n,), T_mpc (n,) [s],
+    Returns dict with X (n+1, 17) = [x; f = k_f Ω²], X_hat (n, 17), D_hat (n, 6),
+    D_true (n, 6), X_r (n, 17), U_r (n, 4), U (n, 4), F_act (n·N_SUB+1, 4)
+    rotor thrust every Ts/N_SUB, status (n,), T_est (n,), T_mpc (n,) [s],
     Y (n, 10) noisy measurements y_k = [p; q; ω] (None for --nominal).
 
     X_r[k], U_r[k] = node 0 of the reference handed to the MPC at t_k (under
     d̂_k). T_mpc covers flatness map + reference setting + solve. A failed
-    solve (status ∉ {0, 2}) is counted; its first input is still applied,
+    solve (status ∉ {0, 2}) is counted; its first command is still applied,
     clipped to the motor limits (u_r if not finite).
     """
-    x0 = flat_to_state_input(REF.sample(0.0)).x_r    # at rest at the origin
-    print('Compiling acados NMPC solver (trajectory tracking)...')
-    solver = traj.create_solver(N, T_HORIZON, omega_max=OMEGA_MPC)
-    plant  = create_disturbance_plant(TS)
+    X_r0, U_r0 = motor_horizon(REF, 0.0, N, TS)
+    x0 = X_r0[0]                                    # at rest at the origin, rotors at hover
+    x_plant = thrust_to_rotor_state(x0)             # plant state [x; Ω]
+    print('Compiling acados NMPC solver (trajectory tracking, motor model)...')
+    solver = traj.create_solver(N, T_HORIZON, omega_max=OMEGA_MPC_MOTOR)
+    plant  = create_rotor_plant(TS / N_SUB)
 
     if not nominal:
         sensor = SensorSimulator(noise_std=MOCAP_NOISE_STD, seed=sensor_seed)
         y      = sensor.measure(x0)
         print('Building MHE (certificate data/mhe_params.npz)...')
-        est    = MovingHorizonEstimator(Ts=TS, z0=project_measurement(y),
-                                        model='rigid')   # 13-state until Stage 6 migrates
+        est    = MovingHorizonEstimator(Ts=TS, z0=project_thrust_lag_measurement(y))
 
-    ref0 = flat_to_state_input(REF.horizon(0.0, N, TS))
-    traj.init_guess(solver, ref0.x_r, ref0.u_r, N)
+    traj.init_guess(solver, X_r0, U_r0, N)
 
-    X      = np.zeros((N_SIM + 1, NX)); X[0] = x0
-    X_hat  = np.zeros((N_SIM, NX))
+    X      = np.zeros((N_SIM + 1, NXM)); X[0] = x0
+    X_hat  = np.zeros((N_SIM, NXM))
     D_hat  = np.zeros((N_SIM, ND))
     D_true = np.zeros((N_SIM, ND))
-    X_r    = np.zeros((N_SIM, NX))
+    X_r    = np.zeros((N_SIM, NXM))
     U_r    = np.zeros((N_SIM, NU))
     U      = np.zeros((N_SIM, NU))
+    F_act  = np.zeros((N_SIM * N_SUB + 1, NU)); F_act[0] = x0[NX:]
     status = np.zeros(N_SIM, dtype=int)
     T_est  = np.full(N_SIM, np.nan)
     T_mpc  = np.zeros(N_SIM)
@@ -140,34 +146,37 @@ def simulate(nominal: bool = False, sensor_seed: int = 42) -> dict:
             t0 = time.perf_counter()
             z_hat = est.step(y, U[k - 1] if k > 0 else None)
             T_est[k] = time.perf_counter() - t0
-            x_hat = quat_normalize(z_hat[:NX].copy())       # MPC wants unit q
-            d_hat = z_hat[NX:]
+            x_hat = quat_normalize(z_hat[:NXM].copy())      # MPC wants unit q
+            d_hat = z_hat[NXM:]
         X_hat[k], D_hat[k] = x_hat, d_hat
 
         # 2. Reference over the horizon (flatness under d̂) + NMPC
         t0 = time.perf_counter()
-        ref = flat_to_state_input(REF.horizon(t, N, TS), d_hat)
+        Xr_h, Ur_h = motor_horizon(REF, t, N, TS, d_hat)
         if k > 0:
-            traj.shift_warm_start(solver, ref.x_r, ref.u_r, N)
-        traj.set_trajectory(solver, ref.x_r, ref.u_r, d_hat, N)
+            traj.shift_warm_start(solver, Xr_h, Ur_h, N)
+        traj.set_trajectory(solver, Xr_h, Ur_h, d_hat, N)
         traj.set_initial_state(solver, x_hat)
         status[k] = solver.solve()
         T_mpc[k]  = time.perf_counter() - t0
 
         u = solver.get(0, 'u')
         if not np.all(np.isfinite(u)):
-            u = ref.u_r[0]
-        U[k] = np.clip(u, 0.0, F_MAX)
-        X_r[k], U_r[k] = ref.x_r[0], ref.u_r[0]
+            u = Ur_h[0]
+        U[k] = np.clip(u, F_MIN, F_MAX)
+        X_r[k], U_r[k] = Xr_h[0], Ur_h[0]
 
-        # 3. Plant with the TRUE disturbance
+        # 3. Plant with the TRUE disturbance (N_SUB substeps, command held)
         d_true    = np.zeros(ND) if nominal else D_TRUE
         D_true[k] = d_true
-        plant.set('x', X[k])
-        plant.set('u', U[k])
-        plant.set('p', d_true)
-        plant.solve()
-        X[k + 1] = quat_normalize(plant.get('x'))
+        for j in range(N_SUB):
+            plant.set('x', x_plant)
+            plant.set('u', U[k])
+            plant.set('p', d_true)
+            plant.solve()
+            x_plant = quat_normalize(plant.get('x'))
+            F_act[k * N_SUB + j + 1] = thrust_from_rotor(x_plant[NX:])
+        X[k + 1] = rotor_to_thrust_state(x_plant)
 
         if k % int(round(2.0 / TS)) == 0:
             print(f'  t={t:5.2f}s  |  ‖p − p_r‖ = '
@@ -175,7 +184,7 @@ def simulate(nominal: bool = False, sensor_seed: int = 42) -> dict:
                   f'd̂_fx = {d_hat[0]:+.3f} (true {d_true[0]:+.3f})  |  status {status[k]}')
 
     return dict(X=X, X_hat=X_hat, D_hat=D_hat, D_true=D_true, X_r=X_r,
-                U_r=U_r, U=U, status=status, T_est=T_est, T_mpc=T_mpc, Y=Y,
+                U_r=U_r, U=U, F_act=F_act, status=status, T_est=T_est, T_mpc=T_mpc, Y=Y,
                 info='' if nominal else est.info())
 
 
@@ -197,7 +206,7 @@ def summarize(res: dict, label: str) -> None:
     cruise = t >= T_CRUISE + 2.0          # skip the first 2 s after the ramp
     fail   = ~np.isin(res['status'], [0, 2])
     U, T_mpc = res['U'], res['T_mpc'] * 1e3
-    sat    = np.mean(np.any((U <= 1e-6) | (U >= F_MAX - 1e-6), axis=1))
+    sat    = np.mean(np.any((U <= F_MIN + 1e-6) | (U >= F_MAX - 1e-6), axis=1))
     rms    = lambda e: np.sqrt(np.mean(e ** 2))
 
     print('\n' + '═' * 66)
@@ -208,16 +217,23 @@ def summarize(res: dict, label: str) -> None:
     print(f'    ‖p − p_r‖  RMS / max (t ≥ {T_CRUISE + 2:.0f} s): '
           f'{1e3 * rms(e_p[cruise]):7.1f} / {1e3 * e_p[cruise].max():7.1f} mm')
     print(f'    attitude err RMS (t ≥ {T_CRUISE + 2:.0f} s): {rms(e_q[cruise]):.2f}°')
-    print(f'    max |ω|                   : {np.abs(res["X"][:, 10:]).max():.3f} rad/s'
-          f'   (soft bound {OMEGA_MPC:.2f}, envelope {OMEGA_MAX})')
-    print(f'    thrust range              : [{U.min():.3f}, {U.max():.3f}] N'
-          f'   (limits [0, {F_MAX:.3f}]), saturated {sat:.1%} of samples')
+    print(f'    max |ω|                   : {np.abs(res["X"][:, 10:13]).max():.3f} rad/s'
+          f'   (soft bound {OMEGA_MPC_MOTOR:.2f}, envelope {OMEGA_MAX})')
+    print(f'    thrust command range      : [{U.min():.3f}, {U.max():.3f}] N'
+          f'   (limits [{F_MIN:.3f}, {F_MAX:.3f}]), saturated {sat:.1%} of samples')
+    f_err = np.abs(res['X'][:-1, NX:] - res['X_r'][:, NX:])
+    print(f'    |f − f_r| mean (t ≥ {T_CRUISE + 2:.0f} s)   : {f_err[cruise].mean():.4f} N')
     if not np.all(np.isnan(res['T_est'])):
+        f_hat_err = np.abs(res['X_hat'][:, NX:] - res['X'][:-1, NX:])[cruise].mean()
+        print(f'    |f̂ − f| mean (t ≥ {T_CRUISE + 2:.0f} s)   : {f_hat_err:.4f} N   (thrust not measured)')
         d_err = np.abs(res['D_hat'][cruise] - res['D_true'][cruise]).mean(axis=0)
         print(f'    |d̂ − d| mean (t ≥ {T_CRUISE + 2:.0f} s)  : force {np.round(d_err[:3], 4)} N,'
               f' torque {np.round(d_err[3:], 5)} N·m')
-        print(f'    MHE time mean / max       : {1e3 * np.nanmean(res["T_est"]):.2f} / '
-              f'{1e3 * np.nanmax(res["T_est"]):.2f} ms')
+        T_est = res['T_est'] * 1e3
+        print(f'    MHE time mean / p99 / max : {np.nanmean(T_est):.2f} / '
+              f'{np.nanpercentile(T_est, 99):.2f} / {np.nanmax(T_est):.2f} ms, '
+              f'over budget in {np.sum(T_est + T_mpc > 1e3 * TS)} steps (MHE + MPC), '
+              f'slowest at t = {np.nanargmax(T_est) * TS:.2f} s')
         print(f'    {res["info"]}')
     print(f'    MPC time mean / p99 / max : {T_mpc.mean():.2f} / {np.percentile(T_mpc, 99):.2f}'
           f' / {T_mpc.max():.2f} ms   (flatness + solve, budget {1e3 * TS:.0f} ms)')
@@ -244,8 +260,9 @@ if __name__ == '__main__':
     plot_states(res['X'], TS, res['X_r'],
                 f'{title}: states vs reference x_r', os.path.join(out, 'states.png'),
                 Y=res['Y'])
-    plot_inputs(res['U'], TS, f'{title}: motor thrusts (dashed: u_r)',
-                os.path.join(out, 'inputs.png'), U_ref=res['U_r'])
+    plot_inputs(res['U'], TS, f'{title}: thrust commands, rotor thrust (dashed: u_r)',
+                os.path.join(out, 'inputs.png'), U_ref=res['U_r'],
+                F_act=res['F_act'], Ts_act=TS / N_SUB, f_bounds=(F_MIN, F_MAX))
     plot_3d_trajectory(res['X'], res['X_r'],
                        f'{title}: 3D flight path', os.path.join(out, 'trajectory_3d.png'),
                        P_meas=None if res['Y'] is None else res['Y'][:, :3])

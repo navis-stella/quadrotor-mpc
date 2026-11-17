@@ -15,11 +15,12 @@ second run (`--nominal`) verifies the controller alone with full state feedback.
 
 | | |
 |---|---|
-| Model / plant | `create_disturbance_model()` (prediction, $d = \hat d$) / `create_disturbance_plant()`, no disturbance |
+| Git tag | `stage6` (13-state model; tag `rigid-body` = all stages before the motor dynamics) |
+| Model / plant | motor dynamics: prediction `create_thrust_lag_disturbance_model()` ($[x;\, f]$, input $f_{\text{cmd}}$, $d = \hat d$), rotor-speed plant `create_rotor_plant()` without disturbance ([model](quadrotor_model.md)) |
 | Horizon | $N = 20$, $T = 1$ s, $T_s = 0.05$ s |
-| Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4, shifted warm start |
+| Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4 (2 steps), shifted warm start |
 | Reference | helix, $R = 2$ m, 5 m climb over 3 turns, 2 m/s, 22.85 s (`reference_generate.py`) |
-| Estimator | certified Lyapunov MHE of Stage 4b, unchanged (`state_est_mhe.py`) |
+| Estimator | certified Lyapunov MHE of Stage 4b on $[x;\, f;\, d]$ (`state_est_mhe.py`); rotor thrusts not measured |
 | Entry point | `./run.sh stage6_trajectory/simulate_trajectory.py [--nominal]` → `results/stage6_trajectory/` |
 
 ---
@@ -124,7 +125,7 @@ Euler's equation gives the torque:
 **5. Motor thrusts.** Invert the mixer: $`u_r = \mathrm{MIXER}^{-1}\,[T;\; \tau]`$.
 
 The result is $`x_r = [p_r,\, v_r,\, q_r,\, \omega_r]`$ and $u_r$ — **exactly** a trajectory of the
-prediction model. The disturbance estimate $\hat d$ enters steps 1 and 4, so under a disturbance
+rigid-body model, with $u_r$ the rotor *thrusts*. The disturbance estimate $\hat d$ enters steps 1 and 4, so under a disturbance
 the reference tilts and the thrusts change such that the helix is still flown by
 $f(x, u, \hat d)$.
 
@@ -139,7 +140,22 @@ model (RK4, 2 ms) and compares the result with $x_r(t)$:
 
 The control case shows that the test is sensitive to $d$. Along the helix the reference stays well
 inside the envelope: $`\lvert\omega_r\rvert \le (0.54,\, 0.48,\, 0.10)`$ rad/s and
-$`u_r \in [2.16,\, 3.00]`$ N against $`[0,\, 7.36]`$ N.
+$`u_r \in [2.16,\, 3.00]`$ N against $`[f_{\min},\, f_{\max}] = [0.07,\, 7.36]`$ N. This self-test checks the rigid-body
+part; the thrust-command extension is checked by the nominal closed loop ([§6.1](#61-verification-nominal-plant-full-state)).
+
+**6. Thrust commands (motor model).** The rotor thrusts are states of the MPC model and lag the
+command, $\dot f = (f_{\text{cmd}} - f)/\tau_m$. To make the rotors produce $f_r(t) = u_r(t)$, the
+command has to lead it:
+
+```math
+x_r^{\text{motor}} = \begin{bmatrix} x_r \\ f_r \end{bmatrix}, \qquad
+f_{\text{cmd},r} = f_r + \tau_m\, \dot f_r .
+```
+
+$\dot f_r$ needs one derivative beyond snap (through $\dot\alpha$), which the generator does not
+provide. `motor_horizon` takes it as a central difference of the analytic map with step
+$10^{-4}$ s; the truncation error is $O(10^{-8})$. With it, the reference is an exact trajectory of
+the thrust-lag model too.
 
 **Role in the loop.** The flatness map is a **reference generator**, not feedback: it reads the
 clock $t$ (and $\hat d$), never the measured state. It runs at every MPC call over the $N+1$
@@ -154,17 +170,17 @@ $z_B \parallel y_C$ (90° pitch, $x_B$ undefined).
 \begin{aligned}
 \min_{u_0, \dots, u_{N-1}} \quad & \sum_{i=0}^{N-1} \Big( \lVert e(x_i, x_{r,i}) \rVert_Q^2 + \lVert u_i - u_{r,i} \rVert_R^2 \Big) \;+\; \lVert e(x_N, x_{r,N}) \rVert_P^2
 \\ \text{s.t.} \quad & x_{i+1} = f(x_i, u_i, \hat d), \qquad x_0 = \hat x(t)
-\\ & 0 \le u_i \le F_{\max}, \qquad \lvert \omega_i \rvert \le 0.9\, \omega_{\max} \;\; \text{(soft)}
+\\ & F_{\min} \le u_i \le F_{\max}, \qquad \lvert \omega_i \rvert \le 0.85\, \omega_{\max} \;\; \text{(soft)}
 \\ & x_{r,i} = x_r(t + i T_s), \qquad u_{r,i} = u_r(t + i T_s)
 \end{aligned}
 ```
 
 ### State error
 
-`state_error(x, x_r)` returns the 12-dimensional error
+`state_error(x, x_r)` returns the 16-dimensional error
 
 ```math
-e(x, x_r) = \begin{bmatrix} p - p_r \\ v - v_r \\ \mathrm{vec}(q \otimes q_r^{-1}) \\ \omega - \omega_r \end{bmatrix} .
+e(x, x_r) = \begin{bmatrix} p - p_r \\ v - v_r \\ \mathrm{vec}(q \otimes q_r^{-1}) \\ \omega - \omega_r \\ f - f_r \end{bmatrix} .
 ```
 
 The attitude part is the vector part of the error quaternion, computed with `quat_error_casadi`
@@ -179,8 +195,9 @@ Compared with the component difference $q - q_r$ of Stages 1–5:
 
 ### Terminal cost
 
-$P$ is the reduced-order DARE solution at hover (`compute_dare_terminal_cost`, as in Stages 2b–4),
-restricted to the same 12 error coordinates. At hover $\mathrm{vec}(q \otimes q_r^{-1}) = q_{xyz}$,
+$P$ is the $T_s$-scaled DARE solution at hover of the thrust-lag model
+(`compute_thrust_lag_dare_terminal_cost`, as in Stages 2b–4), restricted to the same 16 error
+coordinates. At hover $\mathrm{vec}(q \otimes q_r^{-1}) = q_{xyz}$,
 exactly the coordinates of the reduced DARE, so $P$ is the LQR cost-to-go of the error dynamics
 linearized at hover.
 
@@ -199,8 +216,8 @@ the error itself — the same pattern as Stage 5:
 |---|---|
 | $\lVert e \rVert_Q^2 + \lVert u - u_r \rVert_R^2$ | `NONLINEAR_LS`, $`y = [\,e(x, x_r);\; u - u_r\,]`$, `yref = 0` |
 | $\lVert e_N \rVert_P^2$ | `NONLINEAR_LS` terminal, $y_N = e(x_N, x_{r,N})$, $W_e = P$ |
-| $x_{r,i}$, $u_{r,i}$, $\hat d$ | per-node parameter $`p_i = [\,\hat d;\; x_{r,i};\; u_{r,i}\,]`$ (23 entries, `pack_param`) |
-| prediction under $\hat d$ | `create_disturbance_model()`, $\hat d$ in every node |
+| $x_{r,i}$, $u_{r,i}$, $\hat d$ | per-node parameter $`p_i = [\,\hat d;\; x_{r,i};\; u_{r,i}\,]`$ (27 entries, `pack_param`) |
+| prediction under $\hat d$ | `create_thrust_lag_disturbance_model()`, $\hat d$ in every node |
 | soft $\lvert\omega\rvert$ box | `add_soft_omega_box` (Stage 4), keeps the plant in the MHE certificate |
 
 acados scales the stage cost by $T_s$ and the terminal cost by 1, so the effective stage weight is
@@ -213,11 +230,15 @@ $`x_N \leftarrow x_r(t + N T_s)`$. An unshifted guess would lag one sample behin
 reference. The very first call starts from the reference itself (`init_guess`), which is a
 trajectory of the model.
 
-### Weights (identical to Stage 2)
+**Stage 7 still uses the 13-state version.** Until Stage 7 moves to the motor model,
+`create_ocp(model='rigid')` builds the unchanged 13-state OCP, to which Stage 7 adds its obstacle
+constraints.
 
-| | $p_{x,y}$ | $p_z$ | $v_{x,y}$ | $v_z$ | $\mathrm{vec}_{x,y}$ | $\mathrm{vec}_z$ | $\omega$ | $u$ |
-|---|---|---|---|---|---|---|---|---|
-| weight | 80 | 120 | 10 | 15 | 120 | 80 | 1 | 0.1 |
+### Weights (identical to Stages 1–5)
+
+| | $p_{x,y}$ | $p_z$ | $v_{x,y}$ | $v_z$ | $\mathrm{vec}_{x,y}$ | $\mathrm{vec}_z$ | $\omega$ | $f$ | $f_{\text{cmd}}$ |
+|---|---|---|---|---|---|---|---|---|---|
+| weight | 80 | 120 | 10 | 15 | 120 | 80 | 1 | 0.1 | 0.01 |
 
 The attitude weights are the former $q_x, q_y, q_z$ weights: $\mathrm{vec} \approx \frac12$ of
 the roll/pitch/yaw error, as $q_{x,y,z}$ was at hover.
@@ -226,17 +247,18 @@ the roll/pitch/yaw error, as $q_{x,y,z}$ was at hover.
 
 ```
 y_k          = sensor(x_k)                                   y = [p; q; ω] + mocap noise
-ẑ_k          = MHE(y_k, u_{k−1})                             ẑ = [x̂; d̂]
-(X_r, U_r)_k = flatness( helix(t_k + i·Ts), d̂_k ),  i = 0..N
+ẑ_k          = MHE(y_k, u_{k−1})                             ẑ = [x̂; f̂; d̂]
+(X_r, U_r)_k = flatness( helix(t_k + i·Ts), d̂_k ),  i = 0..N  X_r = [x_r; f_r], U_r = f_cmd,r
 u_k          = MPC(x̂_k, X_r, U_r, d̂_k)                      shifted warm start
-x_{k+1}      = plant(x_k, u_k)
+x_{k+1}      = plant(x_k, u_k)                               rotor plant, 5 substeps
 ```
 
-- **Measurement and estimator** are those of Stage 4b, unchanged: mocap noise
-  ($\sigma_p = 1$ cm, $\sigma_q = 10^{-3}$, $\sigma_\omega = 5$ mrad/s) and the MHE with
-  certificate-derived weights and horizon $T = 3$ s. The certificate holds for any attitude, total
-  thrust in $`[0,\, 4F_{\max}]`$ and $\lvert\omega_i\rvert \le 2$ rad/s. The helix needs at most
-  0.55 rad/s, and the MPC's soft bound of 1.8 rad/s keeps the plant inside the envelope.
+- **Measurement and estimator** are those of Stage 4b: mocap noise
+  ($\sigma_p = 1$ cm, $\sigma_q = 10^{-3}$, $\sigma_\omega = 5$ mrad/s), the rotor thrusts are not
+  measured, and the MHE estimates $[x;\, f;\, d]$ with certificate-derived weights and horizon
+  $T = 3$ s. The certificate holds for any attitude, total thrust in $`[4F_{\min},\, 4F_{\max}]`$ and
+  $\lvert\omega_i\rvert \le 2$ rad/s. The helix needs at most 0.55 rad/s, and the MPC's soft bound of
+  1.7 rad/s (the Stage 4 motor-model margin) keeps the plant inside the envelope.
 - **No disturbance** acts on the plant (`D_TRUE = 0`); the MHE still estimates $\hat d$ and the
   $\hat d$ path through the prediction model and the flatness map stays active. The constant
   disturbance of Stages 3–4 is left out on purpose: with the certified weights the MHE needs about
@@ -244,9 +266,10 @@ x_{k+1}      = plant(x_k, u_k)
   much as one position sample. With the 30 % mass error the quadrotor sagged 0.43 m during take-off,
   with the wind alone it drifted 0.2 m. That is a property of the Stage 4b estimator, not of
   trajectory tracking.
-- **Start.** The quadrotor hovers at the origin, exactly at $x_r(0)$, and the run lasts the
+- **Start.** The quadrotor hovers at the origin with the rotors at hover speed, exactly at
+  $x_r(0)$, and the run lasts the
   nominal duration of the helix, 22.85 s (457 MPC calls).
-- **`--nominal`**: full state feedback $\hat x = x$, $\hat d = 0$, no sensor and no estimator.
+- **`--nominal`**: full state feedback $`\hat x = [x;\, k_f \Omega^2]`$, $\hat d = 0$, no sensor and no estimator.
 
 ## 6. Results
 
@@ -258,14 +281,16 @@ by `summarize()`; "cruise" means $t \ge 8$ s, 2 s after the end of the spiral-ou
 ![nominal tracking error](../results/stage6_trajectory/nominal/tracking_error.png)
 
 - 0 of 457 OCP calls failed.
-- The position error stays below 0.2 mm during the take-off hop and falls to about $4 \cdot 10^{-7}$ m
-  in cruise; the attitude error stays below 0.08°.
-- The residual comes from the zero-order hold: the plant receives a piecewise-constant $u_k$ while
-  $u_r(t)$ is continuous. It is largest where $u_r$ changes fastest — the hop and the end of the
-  spiral-out.
+- The position error stays below 0.05 mm (printed as 0.0 mm) over the whole run, the attitude error
+  below 0.005°, and the rotor thrust follows $f_r$ to 0.4 mN on average in cruise.
+- The residual comes from the zero-order hold (the plant receives a piecewise-constant command
+  while $f_{\text{cmd},r}(t)$ is continuous) and from the rotor plant's lag, which differs slightly
+  from the MPC's first-order lag. The helix never asks for large thrust steps, so the mismatch stays
+  tiny.
 
 With an exact, model-consistent reference and the exact state, the optimum of the OCP *is* the
-reference trajectory, and the closed loop reproduces it.
+reference trajectory, and the closed loop reproduces it. This also checks the thrust-command
+extension $f_{\text{cmd},r} = f_r + \tau_m \dot f_r$ of the flatness map.
 
 ### 6.2 Tracking with noisy measurements and the MHE
 
@@ -273,11 +298,16 @@ reference trajectory, and the closed loop reproduces it.
 
 | Metric | Whole run | Cruise ($t \ge 8$ s) |
 |---|---|---|
-| $\lVert p - p_r \rVert$ RMS / max | 9.8 / 20.3 mm | 10.2 / 20.3 mm |
-| attitude error RMS | | 0.65° |
-| $\lvert \hat d_f - d_f \rvert$, mean per axis | | 3–5 mN |
-| max $\lvert\omega\rvert$ | 0.61 rad/s | |
+| $\lVert p - p_r \rVert$ RMS / max | 9.9 / 20.4 mm | 10.2 / 20.1 mm |
+| attitude error RMS | | 0.61° |
+| $\lvert \hat d_f - d_f \rvert$, mean per axis | | 4–5 mN |
+| $\lvert \hat f - f \rvert$, mean (thrust not measured) | | 0.5 mN |
+| max $\lvert\omega\rvert$ | 0.60 rad/s | |
 | failed OCP calls | 0 / 457 | |
+
+The numbers are within a few percent of the 13-state version (9.8 / 20.3 mm, 0.65°): the motor
+dynamics cost nothing in tracking accuracy here. The MHE estimates the unmeasured rotor thrusts to
+0.5 mN on average, far below the command noise.
 
 - The position error settles at about 1 cm, the order of the position-measurement noise
   ($\sigma_p = 1$ cm). It does not grow along the helix: the error comes from the state estimate,
@@ -315,11 +345,12 @@ the end of the reference.
 
 ![inputs](../results/stage6_trajectory/inputs.png)
 
-The total thrust follows the flatness feedforward $T_r$ (dashed): up to about 11 N while the hop
-accelerates upward, down to about 8.3 N while it brakes, then slightly above $mg$ in cruise (the
-centripetal force needs $m\sqrt{g^2 + (R\omega^2)^2} \approx 10.0$ N). The individual thrusts stay
-in $`[1.98,\, 3.16]`$ N, far from both limits; the feedback adds noise of a few tenths of a newton
-around $u_r$.
+Thin steps are the commands, thick lines the rotor thrust $k_f \Omega^2$, dashed the feedforward.
+The total thrust follows the flatness feedforward $T_r$: up to about 11 N while the hop
+accelerates upward, down to about 8.2 N while it brakes, then slightly above $mg$ in cruise (the
+centripetal force needs $m\sqrt{g^2 + (R\omega^2)^2} \approx 10.0$ N). The commands stay in
+$`[1.87,\, 3.20]`$ N, far from both limits; the feedback adds noise of a few tenths of a newton
+around the feedforward, which the speed loop smooths in the rotor thrust.
 
 ### 6.6 Computation time
 
@@ -327,13 +358,15 @@ around $u_r$.
 
 | | mean | p99 | max |
 |---|---|---|---|
-| MPC (flatness map + solve) | 3.4 ms | 8.5 ms | 81 ms |
-| MHE | 13.6 ms | — | 45 ms |
+| MPC (flatness map + solve) | 6.2 ms | 8.9 ms | 13.0 ms |
+| MHE | 14.4 ms | 18.6 ms | 20.9 ms |
 
-Estimator and MPC run one after the other in the same 50 ms sample, about 17 ms together on
-average. The maxima are **single isolated spikes** (one MPC call at 81 ms, visible in the figure)
-and vary from run to run — other runs showed MHE maxima around 100 ms. They are wall-clock times on
-WSL and not reproducible; the typical calls stay far within the budget.
+Estimator and MPC run one after the other in the same 50 ms sample, about 21 ms together on
+average, and no step exceeded the budget in this run. The flatness map now runs three times per
+call (for the central difference of $\dot f_r$), which roughly doubles the MPC time compared with
+the 13-state version (3.4 ms). Maxima vary from run to run: two earlier runs had a single MHE call
+at 77 and 87 ms. They are wall-clock times on WSL and not reproducible; the typical calls stay
+far within the budget.
 
 ## 7. Observations and limitations
 
@@ -356,10 +389,10 @@ WSL and not reproducible; the typical calls stay far within the budget.
 | File | Role |
 |---|---|
 | `reference_generate.py` | helix reference: `HelixParams`, `HelixReference.sample()` / `.horizon()`, self-test, `--plot` |
-| `reference_flatness.py` | flatness map `flat_to_state_input(ref, d_hat)` → $(x_r, u_r)$, open-loop self-test |
-| `ocp_config_trajectory.py` | tracking OCP: `state_error()`, `create_solver()`, `set_trajectory()`, `shift_warm_start()` |
+| `reference_flatness.py` | flatness map `flat_to_state_input(ref, d_hat)` → $(x_r, u_r)$, open-loop self-test; `motor_horizon()` → $([x_r;\, f_r],\, f_{\text{cmd},r})$ |
+| `ocp_config_trajectory.py` | tracking OCP: `state_error()`, `create_solver()`, `set_trajectory()`, `shift_warm_start()`; `model='rigid'` for Stage 7 |
 | `simulate_trajectory.py` | closed loop (MHE or `--nominal`), summary, figures |
-| `state_est_mhe.py` | the Stage 4b MHE, reused unchanged |
+| `state_est_mhe.py` | the Stage 4b MHE (motor model), reused |
 | `plot_utils.py` | `plot_tracking_error()` (new); `plot_states` / `plot_3d_trajectory` accept a time-varying reference and noisy measurements, `plot_inputs` the feedforward $u_r$ |
 
 ```bash
@@ -368,6 +401,13 @@ WSL and not reproducible; the typical calls stay far within the budget.
 ./run.sh stage6_trajectory/simulate_trajectory.py  # MHE run   → results/stage6_trajectory/
 ./run.sh stage6_trajectory/simulate_trajectory.py --nominal  # nominal   → results/stage6_trajectory/nominal/
 QUAD_PLOTS=none ./run.sh stage6_trajectory/simulate_trajectory.py # save only, no windows
+```
+
+The 13-state version from its tag:
+
+```bash
+git checkout stage6
+./run.sh simulate_trajectory.py
 ```
 
 ## References

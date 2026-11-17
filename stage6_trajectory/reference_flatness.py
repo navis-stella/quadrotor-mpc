@@ -189,6 +189,39 @@ def horizon_xu(ref_gen, t0: float, N: int, dt: float, d_hat=None):
 
 
 # ─────────────────────────────────────────────────────────────────
+# Motor-dynamics extension (Stage 6 on the thrust-lag model)
+# ─────────────────────────────────────────────────────────────────
+H_DIFF = 1e-4      # [s] step of the central difference for the thrust rate
+
+
+def motor_horizon(ref_gen, t0: float, N: int, dt: float, d_hat=None):
+    """
+    Reference of the thrust-lag model at the OCP stages t0 + k·dt, k = 0..N:
+
+        X_r (N+1, 17) = [x_r; f_r]          f_r = u_r of the rigid-body map (the rotor THRUST)
+        U_r (N+1, 4)  = f_cmd,r = f_r + τ_m·ḟ_r
+
+    The thrust states lag the command, ḟ = (f_cmd − f)/τ_m, so the command
+    that makes the rotors produce f_r(t) leads it by τ_m·ḟ_r. With it,
+    (X_r, U_r) is an exact trajectory of the MPC's model and the stage cost
+    vanishes on the reference.
+
+    ḟ_r needs one derivative beyond snap (through the body angular
+    acceleration), which the generator does not provide; it is taken as a
+    central difference of the analytic map with step H_DIFF (times before 0
+    clamp to rest, so t0 = 0 works). Truncation error O(H_DIFF²).
+    """
+    t = t0 + dt * np.arange(N + 1)
+    out = flat_to_state_input(ref_gen.sample(t), d_hat)
+    u_p = flat_to_state_input(ref_gen.sample(t + H_DIFF), d_hat).u_r
+    u_m = flat_to_state_input(ref_gen.sample(t - H_DIFF), d_hat).u_r
+    f_dot = (u_p - u_m) / (2.0 * H_DIFF)
+    X_r = np.concatenate([out.x_r, out.u_r], axis=-1)
+    U_r = out.u_r + qm.TAU_MOTOR * f_dot
+    return X_r, U_r
+
+
+# ─────────────────────────────────────────────────────────────────
 # self-test
 # ─────────────────────────────────────────────────────────────────
 def _quat_angle(q1, q2):

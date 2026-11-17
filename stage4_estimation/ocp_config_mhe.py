@@ -17,9 +17,6 @@ Known input (NU = 4):               u = f_cmd = [ f1, f2, f3, f4 ]_cmd
 Measurement (NY = 10):              y = [ p(3), q(4), ω(3) ]   (f not measured)
 Model:                              quadrotor_model.create_thrust_lag_mhe_model()
 
-Transitional (until Stage 6 migrates): model='rigid' builds the 13-state
-MHE (z = [x; d], 19, thrusts as known input) with its own certificate
-data/mhe_params_rigid.npz — Stage 6 still runs on the 13-state model.
 
 Design order (Theorem 1/2 of Schiller & Müller, 2024) — one decay symbol, λ
     λ (per second) → κ = −ln λ → LMI → P, Q, R, T_min = ln4/κ   detectability_check.py
@@ -78,17 +75,14 @@ from casadi import SX, vertcat, mtimes, power, fabs, sumsqr
 from acados_template import AcadosOcp, AcadosOcpSolver
 
 from core.quadrotor_model import (
-    create_mhe_model, create_thrust_lag_mhe_model,
+    create_thrust_lag_mhe_model,
     measurement_expr,
     quat_error_casadi,
-    F_MIN, F_MAX, NX, NXM, NU, NY, NZ, NZM,
+    F_MIN, F_MAX, NX, NXM, NU, NY, NZM,
 )
 from core.codegen import build_path
 
-MHE_MODELS = {                    # model → (state dim, acados model factory, RK4 steps)
-    'motor': (NZM, create_thrust_lag_mhe_model, 2),
-    'rigid': (NZ,  create_mhe_model,            1),   # transitional (Stage 6)
-}
+N_RK4 = 2                        # RK4 steps per Ts (τ_m < Ts), as the MPC and the EKF
 
 
 # =============================================================================
@@ -101,7 +95,7 @@ MHE_MODELS = {                    # model → (state dim, acados model factory, 
 #  Stored keys (all continuous-time — independent of the MHE sample time):
 #    P            (nz, nz)  δ-IOSS Lyapunov weight        → MHE arrival cost
 #    Q, R         (nz, nz), (NY, NY)  CT supply rates      → MHE stage cost
-#                 nz = NZM = 23 (motor), NZ = 19 (rigid, data/mhe_params_rigid.npz)
+#                 nz = NZM = 23
 #    lam          decay per SECOND, λ = e^{−κ}   (the design input)
 #    kappa        decay rate [1/s],  κ = −ln λ
 #    T_hor_min    minimum horizon (17):  T > ln4/κ
@@ -114,9 +108,8 @@ MHE_MODELS = {                    # model → (state dim, acados model factory, 
 #
 #  Only certificates that PASSED verification are written.
 
-MHE_PARAMS_PATH       = 'data/mhe_params.npz'         # motor model (detectability_check.py)
-MHE_PARAMS_RIGID_PATH = 'data/mhe_params_rigid.npz'   # 13-state, transitional (Stage 6)
-HORIZON_FACTOR        = 1.5      # T_hor ≥ c·T_min   (c > 1 required by (17))
+MHE_PARAMS_PATH = 'data/mhe_params.npz'   # written by detectability_check.py
+HORIZON_FACTOR  = 1.5                     # T_hor ≥ c·T_min   (c > 1 required by (17))
 
 
 def save_mhe_params(path: str = MHE_PARAMS_PATH, **fields):
@@ -126,14 +119,12 @@ def save_mhe_params(path: str = MHE_PARAMS_PATH, **fields):
 
 def load_mhe_params(path:           str   = MHE_PARAMS_PATH,
                     Ts:             float = 0.05,
-                    horizon_factor: float = HORIZON_FACTOR,
-                    model:          str   = 'motor') -> dict:
+                    horizon_factor: float = HORIZON_FACTOR) -> dict:
     """
     Load a verified δ-IOSS certificate, choose the horizon and discretize
     it for the MHE grid.
 
-    Ts is the MHE sample time, model ('motor' | 'rigid') the state the
-    certificate must be for. Added keys:
+    Ts is the MHE sample time. Added keys:
         Ts              MHE sample time [s]
         N               horizon in stages, N = ⌈c·T_min/Ts⌉ (c = horizon_factor)
         T_hor           horizon time N·Ts [s]  (> T_min, independent of the MPC)
@@ -156,10 +147,9 @@ def load_mhe_params(path:           str   = MHE_PARAMS_PATH,
         cert[k] = float(cert[k])
 
     # Guards against a stale file from a different model
-    nz = MHE_MODELS[model][0]
-    assert cert['P'].shape == (nz, nz), \
-        f"P shape {cert['P'].shape} — certificate is not for the {model} model (stale file?)"
-    assert cert['Q'].shape == (nz, nz), f"Q shape {cert['Q'].shape}"
+    assert cert['P'].shape == (NZM, NZM), \
+        f"P shape {cert['P'].shape} — not a motor-model certificate (stale file?)"
+    assert cert['Q'].shape == (NZM, NZM), f"Q shape {cert['Q'].shape}"
     assert cert['R'].shape == (NY, NY), f"R shape {cert['R'].shape}"
     assert np.isclose(cert['lam'], np.exp(-cert['kappa'])), 'λ ≠ e^{−κ}'
 
@@ -184,8 +174,8 @@ def load_mhe_params(path:           str   = MHE_PARAMS_PATH,
 #  Per-node parameter layout
 # =============================================================================
 #    p = [ t_age(1), a_arr(1), m_meas(1), z_prior(nz), y_meas(NY), u(NU) ]
-#      = 3 + 23 + 10 + 4 = 40   (motor;  rigid: 3 + 19 + 10 + 4 = 36)
-#    u = thrust command (motor) or rotor thrust (rigid) — the known input.
+#      = 3 + 23 + 10 + 4 = 40
+#    u = thrust command — the known input.
 #  export_drone_mhe_solver builds the symbols in this order, pack_mhe_param
 #  fills them — keep the two next to each other.
 def n_param(nz: int) -> int:
@@ -213,8 +203,7 @@ def export_drone_mhe_solver(ts:        float,
                             R:         np.ndarray,
                             Q:         np.ndarray,
                             omega_max: float = None,
-                            model_kind: str  = 'motor',
-                            hessian_approx: str = None,
+                            hessian_approx: str = 'GAUSS_NEWTON',
                             regularize:     str = 'NO_REGULARIZE') -> AcadosOcpSolver:
     """
     Build the acados MHE OCP for the 3D quadrotor (augmented state).
@@ -228,10 +217,8 @@ def export_drone_mhe_solver(ts:        float,
     R         : (NY, NY) CT measurement supply rate     (as is — acados scales by ts)
     Q         : (nz, nz) CT process-noise supply rate   (as is — acados scales by ts)
     omega_max : certified |ωᵢ| bound → hard box on every node, None = no box
-                (motor model: plus F_MIN ≤ f̂ᵢ ≤ F_MAX, the certified thrust range)
-    model_kind: 'motor' (z = [x; f; d], 23) or 'rigid' (z = [x; d], 19, transitional)
-    hessian_approx: None → 'GAUSS_NEWTON' on the motor model, 'EXACT' on the rigid one.
-                acados always evaluates the EXACT Hessian of an EXTERNAL cost;
+                plus F_MIN ≤ f̂ᵢ ≤ F_MAX, the certified thrust range
+    hessian_approx: 'GAUSS_NEWTON' (default). acados always evaluates the EXACT Hessian of an EXTERNAL cost;
                 GAUSS_NEWTON only drops the second-order terms of the dynamics.
                 On the motor model those contain the bilinear R(q)·f (thrust
                 states pushing along the body axis) and make the exact
@@ -247,10 +234,8 @@ def export_drone_mhe_solver(ts:        float,
     """
     # ── dynamic + observation model (from quadrotor_model) ───────────
     #    z(nz), u = w(nz), p = known input(4)
-    nz, make_model, n_rk4 = MHE_MODELS[model_kind]
-    model = make_model()
-    if hessian_approx is None:
-        hessian_approx = 'GAUSS_NEWTON' if model_kind == 'motor' else 'EXACT'
+    nz    = NZM
+    model = create_thrust_lag_mhe_model()
 
     ocp        = AcadosOcp()
     ocp.model  = model
@@ -335,10 +320,9 @@ def export_drone_mhe_solver(ts:        float,
         idx_box = np.arange(10, 13)
         lb_box  = np.full(3, -omega_max)
         ub_box  = np.full(3, +omega_max)
-        if model_kind == 'motor':
-            idx_box = np.concatenate([idx_box, np.arange(NX, NXM)])
-            lb_box  = np.concatenate([lb_box, np.full(NU, F_MIN)])
-            ub_box  = np.concatenate([ub_box, np.full(NU, F_MAX)])
+        idx_box = np.concatenate([idx_box, np.arange(NX, NXM)])
+        lb_box  = np.concatenate([lb_box, np.full(NU, F_MIN)])
+        ub_box  = np.concatenate([ub_box, np.full(NU, F_MAX)])
 
         ocp.constraints.idxbx_0 = idx_box                     # no x0 — node 0 is free
         ocp.constraints.lbx_0   = lb_box
@@ -356,7 +340,7 @@ def export_drone_mhe_solver(ts:        float,
     ocp.solver_options.regularize_method   = regularize
     ocp.solver_options.integrator_type     = 'ERK'
     ocp.solver_options.sim_method_num_stages = 4
-    ocp.solver_options.sim_method_num_steps  = n_rk4      # motor: τ_m < Ts
+    ocp.solver_options.sim_method_num_steps  = N_RK4      # τ_m < Ts
     ocp.solver_options.N_horizon           = N
     ocp.solver_options.tf                  = N * ts
     ocp.solver_options.nlp_solver_type     = 'SQP_RTI'

@@ -9,10 +9,6 @@
 | Certificate | `data/mhe_params.npz` — $P$, $Q$, $R$, $\lambda$, $T_{\min}$, envelope |
 | Results | `results/stage4b_mhe/`, `results/stage4_compare/` |
 
-> **Stage 6 still uses the 13-state MHE.** Until Stage 6 moves to the motor model, the MHE
-> classes keep a `model='rigid'` path that runs on the frozen 13-state certificate
-> `data/mhe_params_rigid.npz`. Everything in this document is the motor-model version.
-
 Main references:
 J. D. Schiller, S. Muntwiler, J. Köhler, M. N. Zeilinger, M. A. Müller, *A Lyapunov function
 for robust stability of moving horizon estimation*, IEEE TAC 68(12), 2023

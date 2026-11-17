@@ -302,7 +302,8 @@ def create_solver(pillars,
     runtime helpers of ocp_config_trajectory (set_trajectory,
     set_initial_state, init_guess, shift_warm_start) apply unchanged.
     """
-    ocp = traj.create_ocp(N, T_horizon, omega_max)
+    ocp = traj.create_ocp(N, T_horizon, omega_max,
+                          model='rigid')   # 13-state until Stage 7 migrates
     # one name per γ: each solver is its own shared library, so several γ
     # can be built and run in one process (the sweep of simulate_obst_dcbf)
     name = 'obst_dist' if gamma is None else f'obst_dcbf_g{gamma:g}'.replace('.', 'p')
