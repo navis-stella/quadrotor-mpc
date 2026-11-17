@@ -6,7 +6,7 @@ Predictive Control: Classical, Robust and Stochastic", Springer 2016, ch. 6–7;
 Farina, Giulioni & Scattolini, "Stochastic linear MPC with chance constraints
 — a review", J. Process Control 2016; Hewing & Zeilinger, IEEE CDC 2018):
 
-    1. linear model      x⁺ = A x + B u + w               (hover, ZOH, 12 states)
+    1. linear model      x⁺ = A x + B u + w               (hover, ZOH, 16 states)
     2. disturbance       w = G_d d,  d ~ N(0, Σ_d) i.i.d.  → Σ_w = G_d Σ_d G_dᵀ
     3. error feedback    K, P    (DARE of the MPC cost: u = v + K e, V_f = ‖z‖²_P)
     4. error covariance  Σ_e(k+1) = A_K Σ_e(k) A_Kᵀ + Σ_w,   Σ_e(0) = 0
@@ -14,7 +14,10 @@ Farina, Giulioni & Scattolini, "Stochastic linear MPC with chance constraints
                          η_{j,k} = h_j − κ_j √(H_j K Σ_e(k) Kᵀ H_jᵀ)    (inputs)
 
 Coordinates (the ones of Stage 8, compute_tube_params): deviation from the
-target hover point,  x = [p − p_ref, v, qx qy qz, ω]  (12),  u = f − f_hover.
+target hover point on the thrust-lag model,
+x = [p − p_ref, v, qx qy qz, ω, f − f_hover]  (16),  u = f_cmd − f_hover.
+The rotor thrusts f are states (they lag the commands by τ_m = 30 ms) and are
+fed back by K like the rest of the state.
 
 Why this turns the chance constraint into a linear one:
     Split x = z + e with z = E{x} and u = v + K e. Then z⁺ = A z + B v carries
@@ -29,22 +32,24 @@ Why this turns the chance constraint into a linear one:
     valid for ANY zero-mean w with covariance Σ_w, at the price of a 2.6×
     larger back-off at β = 0.05 (METHOD, printed side by side).
 
-    Σ_e(0) = 0: the first input u(t) = v(t|t) is deterministic, so the motor
-    limits hold as HARD constraints in closed loop; only the predicted inputs
-    k ≥ 1 are tightened.
+    Σ_e(0) = 0: the first input u(t) = v(t|t) is deterministic, so the
+    command limits hold as HARD constraints in closed loop; only the predicted
+    inputs k ≥ 1 are tightened.
 
 What the model leaves out:
-    The plant is the nonlinear quadrotor. Σ_w is the covariance of d pushed
-    through G_d = ∂F/∂d at hover (the plant's own RK4 step) — the
-    linearization error of Stage 8 is NOT in it: it is neither zero-mean nor
-    independent of x. The tilt chance constraint keeps the plant where that
+    The plant is the nonlinear quadrotor with rotor-speed dynamics. Σ_w is
+    the covariance of d pushed through G_d = ∂F/∂d at hover (the rotor
+    plant's own RK4 step) — the linearization error of Stage 8 (rigid body
+    and rotor loop) is NOT in it: it is neither zero-mean nor independent
+    of x. The tilt chance constraint keeps the plant where that
     error is small, and self_test / the Monte Carlo of simulate_smpc measure
     on the nonlinear plant what the linear theory promises.
 
 Sets — the one definition (OCP, simulation and plots import these):
     X: G x ≤ g  — a wall in front of the target, p_x − p_ref,x ≤ WALL_X, and a
        tilt box |qx|, |qy| ≤ Q_TILT; each row its own β_j.
-    U: H u ≤ h  — the motor box 0 ≤ f_i ≤ F_MAX.
+    U: H u ≤ h  — the command box F_MIN ≤ f_cmd,i ≤ F_MAX (the rotor plant
+       clips to it; the thrusts follow the commands inside the same box).
 
 Writes data/smpc_params.npz (SMPC_PARAMS_PATH), read by load_smpc_params().
 
@@ -59,10 +64,8 @@ import casadi as ca
 from scipy.linalg import solve_discrete_are
 from scipy.stats import norm
 
-from core.quadrotor_model import f_hover, F_MAX, NU, ND
-from stage8_tube.compute_tube_params import (NE_RIGID as NE, NAMES_RIGID as NAMES, TS,   # 13-state
-                                             linear_model_rigid as linear_model,       # until Stage 9
-                                             residual_function_rigid as residual_function)  # migrates
+from core.quadrotor_model import f_hover, F_MIN, F_MAX, NU, ND
+from stage8_tube.compute_tube_params import NE, NAMES, TS, linear_model, residual_function
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -90,8 +93,9 @@ N_HORIZON = 40                # 2 s — the tightening is computed per predictio
 Q_SCALE = np.array([0.5] * 3 +              # [m]     position
                    [1.0] * 3 +              # [m/s]   velocity
                    [0.1] * 3 +              # [-]     qx, qy, qz
-                   [1.0] * 3)               # [rad/s] body rates
-R_SCALE = 1.0                               # [N]     motor thrust deviation
+                   [1.0] * 3 +              # [rad/s] body rates
+                   [1.0] * 4)               # [N]     rotor thrust deviation (states)
+R_SCALE = 1.0                               # [N]     thrust command deviation
 
 SMPC_PARAMS_PATH = os.path.join('data', 'smpc_params.npz')
 
@@ -101,7 +105,7 @@ SMPC_PARAMS_PATH = os.path.join('data', 'smpc_params.npz')
 # ─────────────────────────────────────────────────────────────────
 def state_constraints():
     """
-    (G (5, 12), g (5,), β (5,), names) in deviation coordinates:
+    (G (5, 16), g (5,), β (5,), names) in deviation coordinates:
     the wall row first, then ±qx, ±qy.
     """
     G = np.zeros((5, NE))
@@ -114,9 +118,9 @@ def state_constraints():
 
 
 def input_constraints():
-    """(H (8, 4), h (8,), β (8,)): f_i − f_hover ≤ F_MAX − f_hover, −(f_i − f_hover) ≤ f_hover."""
+    """(H (8, 4), h (8,), β (8,)): u_i ≤ F_MAX − f_hover, −u_i ≤ f_hover − F_MIN  (u = f_cmd − f_hover)."""
     H = np.vstack([np.eye(NU), -np.eye(NU)])
-    h = np.concatenate([np.full(NU, F_MAX - f_hover), np.full(NU, f_hover)])
+    h = np.concatenate([np.full(NU, F_MAX - f_hover), np.full(NU, f_hover - F_MIN)])
     return H, h, np.full(2 * NU, BETA_U)
 
 
@@ -125,9 +129,10 @@ def input_constraints():
 # ─────────────────────────────────────────────────────────────────
 def disturbance_gain(A: np.ndarray, B: np.ndarray, Ts: float = TS) -> np.ndarray:
     """
-    G_d = ∂x⁺/∂d at hover (12 × 6) — Jacobian of the plant's RK4 step
+    G_d = ∂x⁺/∂d at hover (16 × 6) — Jacobian of the rotor plant's RK4 step
     (compute_tube_params.residual_function), so w = G_d d is the first-order
-    effect of d on the very integrator the simulation uses.
+    effect of d on the very integrator the simulation uses. The thrust rows
+    are zero: d acts on v̇ and ω̇, not on the rotors.
     """
     w_fun = residual_function(A, B, Ts)
     d     = ca.SX.sym('d', ND)
@@ -146,7 +151,7 @@ def lqr(A, B, Q, R):
 
 
 def error_covariance(A_K: np.ndarray, Sigma_w: np.ndarray, N: int) -> np.ndarray:
-    """Σ_e(k), k = 0..N  (N+1, 12, 12):  Σ_e(0) = 0,  Σ_e(k+1) = A_K Σ_e(k) A_Kᵀ + Σ_w."""
+    """Σ_e(k), k = 0..N  (N+1, 16, 16):  Σ_e(0) = 0,  Σ_e(k+1) = A_K Σ_e(k) A_Kᵀ + Σ_w."""
     S = np.zeros((N + 1, NE, NE))
     for k in range(N):
         S[k + 1] = A_K @ S[k] @ A_K.T + Sigma_w
@@ -194,7 +199,7 @@ def compute_smpc_params(N: int = N_HORIZON, method: str = METHOD, verbose: bool 
     sig_u = row_std(H @ K, Sigma_e[:N])               # (N, 8)
     theta = g - backoff_factor(beta_x, method) * sig_x
     eta   = h - backoff_factor(beta_u, method) * sig_u
-    assert np.all(eta > 0), 'tightened motor box is empty — K too aggressive for Σ_w'
+    assert np.all(eta > 0), 'tightened command box is empty — K too aggressive for Σ_w'
     assert np.all(theta[:, 1:] > 0), 'tightened tilt box is empty'
 
     # stationary covariance (k → ∞): how far the horizon is from it
@@ -227,7 +232,7 @@ def compute_smpc_params(N: int = N_HORIZON, method: str = METHOD, verbose: bool 
                   f' {theta[k, 1]:8.4f} ' + u_part)
         print(f'  {"∞":>4s} {sig_inf[0]:10.4f} {g[0] - k_g * sig_inf[0]:11.4f} {sig_inf[1]:8.4f}'
               f' {g[1] - k_g * sig_inf[1]:8.4f}')
-        print(f'  wall g = {g[0]} m, tilt g = {g[1]};  motor box h = +{h[0]:.3f} / −{h[NU]:.3f} N')
+        print(f'  wall g = {g[0]} m, tilt g = {g[1]};  command box h = +{h[0]:.3f} / −{h[NU]:.3f} N')
         print('────────────────────────────────────────────────────────────────────')
     return par
 
@@ -252,8 +257,8 @@ def load_smpc_params(path: str = SMPC_PARAMS_PATH) -> dict:
 def self_test(par: dict, n: int = 20_000, seed: int = 3) -> None:
     """
     The open-loop prediction the tightening rests on, against the NONLINEAR
-    plant: n realizations of the error system started at hover (z = 0, v = 0,
-    so x = e and u = f_hover + K e), d ~ N(0, Σ_d) every sample.
+    rotor plant: n realizations of the error system started at hover (z = 0,
+    v = 0, so x = e and u = f_hover + K e), d ~ N(0, Σ_d) every sample.
 
       1. E{e(k)} ≈ 0 and std of G_j e(k), H_j K e(k) ≈ √(· Σ_e(k) ·ᵀ)
       2. coverage  Pr{ G_j e(k) ≤ κ_j σ_{j,k} } ≈ 1 − β_j  (what θ promises)
@@ -273,7 +278,9 @@ def self_test(par: dict, n: int = 20_000, seed: int = 3) -> None:
         if k > 0:
             r_x[k] = (E @ G.T).std(axis=0) / par['sig_x'][k]
             cov[k] = np.mean(E @ G.T <= kap_x * par['sig_x'][k], axis=0)
-            mean[k] = np.max(np.abs(E.mean(axis=0)) / np.sqrt(np.diag(par['Sigma_e'][k])))
+            sd = np.sqrt(np.diag(par['Sigma_e'][k]))
+            on = sd > 0                          # thrust states: σ = 0 at k = 1 (d reaches them a step later)
+            mean[k] = np.max(np.abs(E.mean(axis=0))[on] / sd[on])
         if k == N:
             break
         U = E @ K.T

@@ -84,10 +84,6 @@ different jobs: K keeps e small, the MPC moves z to the target.
 
 Writes data/tube_params.npz (TUBE_PARAMS_PATH), read by load_tube_params().
 
-Transitional (until Stage 9 migrates): NE_RIGID, NAMES_RIGID, reduce_state_rigid,
-linear_model_rigid, residual_function_rigid keep the 13-state coordinates that
-Stage 9 still uses.
-
 Run:  python -m stage8_tube.compute_tube_params            → data/tube_params.npz
       python -m stage8_tube.compute_tube_params --check    self_test of the saved parameters
 """
@@ -102,8 +98,8 @@ from scipy.signal import cont2discrete
 from scipy.linalg import solve_discrete_are
 from scipy.optimize import linprog
 
-from core.quadrotor_model import (create_disturbance_model, rotor_plant_model, create_rotor_plant,
-                                  get_hover_linearization, get_thrust_lag_hover_linearization,
+from core.quadrotor_model import (rotor_plant_model, create_rotor_plant,
+                                  get_thrust_lag_hover_linearization,
                                   rotor_to_thrust_state, thrust_to_rotor_state, quat_normalize,
                                   MIXER, f_hover, F_MIN, F_MAX, K_F, NX, NXM, NU, ND)
 from core.integrators import rk4_step          # the plant's ERK4 (4 steps per Ts)
@@ -636,46 +632,6 @@ def self_test(par: dict, n: int = 300, seed: int = 3) -> None:
     print(f'  h_S attained ({len(ratio)} rows)     : cᵀe_s / ((1−α) h_S) ∈ [{min(ratio):.6f}, {max(ratio):.6f}]')
     print(f'  X_f boundary (20000 pts)   : max |z|/x̄ = {x_sh:.3f}, max |M K_f z|/ν̄ = {u_sh:.3f},'
           f'  |ΔV_f + ℓ| ≤ {dec:.1e}')
-
-
-# ═════════════════════════════════════════════════════════════════
-# Transitional: 13-state coordinates (Stage 9 until it migrates)
-# ═════════════════════════════════════════════════════════════════
-IDX_KEEP_RIGID = np.array([0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12])
-NE_RIGID       = len(IDX_KEEP_RIGID)                              # 12
-NAMES_RIGID    = NAMES[:12]
-
-
-def reduce_state_rigid(x: np.ndarray, p_ref: np.ndarray) -> np.ndarray:
-    """13-state (qw > 0) → 12-dim deviation [p − p_ref, v, qv, ω]."""
-    e = x[IDX_KEEP_RIGID].copy()
-    e[0:3] -= p_ref
-    return e
-
-
-def linear_model_rigid(Ts: float = TS):
-    """(A, B) of the 13-state hover linearization, qw removed, ZOH."""
-    A_c, B_c = get_hover_linearization()
-    A_c = A_c[np.ix_(IDX_KEEP_RIGID, IDX_KEEP_RIGID)]
-    B_c = B_c[IDX_KEEP_RIGID, :]
-    A, B, *_ = cont2discrete((A_c, B_c, np.eye(NE_RIGID), np.zeros((NE_RIGID, NU))), Ts, method='zoh')
-    return A, B
-
-
-def residual_function_rigid(A: np.ndarray, B: np.ndarray, Ts: float = TS) -> ca.Function:
-    """w(e, u, d) of the 13-state plant (one RK4 step + normalization)."""
-    model  = create_disturbance_model()
-    x_next = rk4_step(model, Ts)
-    F      = ca.Function('F', [model.x, model.u, model.p], [x_next])
-    e = ca.SX.sym('e', NE_RIGID)
-    u = ca.SX.sym('u', NU)
-    d = ca.SX.sym('d', ND)
-    qw = ca.sqrt(1.0 - ca.sumsqr(e[6:9]))
-    xn = F(ca.vertcat(e[0:6], qw, e[6:12]), f_hover + u, d)
-    qn = xn[6:10] / ca.norm_2(xn[6:10])
-    en = ca.vertcat(xn[0:6], qn[1:4], xn[10:13])
-    w  = en - ca.mtimes(ca.DM(A), e) - ca.mtimes(ca.DM(B), u)
-    return ca.Function('w_res', [e, u, d], [w])
 
 
 if __name__ == '__main__':

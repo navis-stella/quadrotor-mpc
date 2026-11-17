@@ -7,17 +7,19 @@ performance. This stage implements **linear stochastic MPC with chance constrain
 but only with a prescribed probability $\beta$. The stochastic problem is rewritten as an ordinary
 QP with tightened constraints, and the tightening is computed offline from the error covariance.
 
-As in Stage 8, the controller is linear and the plant is the **nonlinear** quadrotor.
+As in Stage 8, the controller is linear and the plant is the **nonlinear** quadrotor with
+rotor-speed dynamics.
 
 | | |
 |---|---|
-| Prediction model | hover linearization, 12 states, ZOH at $T_s = 0.05$ s (the one of Stage 8) |
-| Plant | `create_disturbance_plant()` — nonlinear, ERK4, $`d(t) \sim \mathcal N(0, \Sigma_d)`$ i.i.d. per sample |
-| Feedback | full state |
+| Prediction model | hover linearization of the thrust-lag model, 16 states, ZOH at $T_s = 0.05$ s (the one of Stage 8) |
+| Plant | `create_rotor_plant(Ts)` — rotor speeds, ESC loop, $f = k_f \Omega^2$, ERK4, $`d(t) \sim \mathcal N(0, \Sigma_d)`$ i.i.d. per sample |
+| Feedback | full state (rotor thrusts included) |
 | Horizon | $N = 40$, $T = 2$ s |
 | Solver | acados `SQP` (one step — the OCP is a QP), `PARTIAL_CONDENSING_HPIPM`, `DISCRETE` dynamics |
 | Offline | `compute_smpc_params.py` → `data/smpc_params.npz` |
 | Entry point | `./run.sh stage9_smpc/simulate_smpc.py` → `results/stage9_smpc/` |
+| Git tag | `stage9` (13-state model; tag `rigid-body` = all stages before the motor dynamics) |
 
 ---
 
@@ -79,7 +81,7 @@ Gaussian factor (`METHOD`); the distribution-free one is implemented and printed
 
 **Inputs.** The predicted input $v + K e$ is random as well, so $H u \le h$ is tightened the same
 way with $`\sqrt{H_j K \Sigma_e(k) K^\top H_j^\top}`$. At $k = 0$ the error is zero, so
-$\eta_{j,0} = h_j$: the applied input $u(t) = v(t|t)$ is deterministic and the motor limits are
+$\eta_{j,0} = h_j$: the applied input $u(t) = v(t|t)$ is deterministic and the command limits are
 **hard** in closed loop.
 
 **The OCP** solved at every sample:
@@ -101,16 +103,20 @@ tightening **grows along the horizon**.
 
 ## 3. From the quadrotor to $x^+ = Ax + Bu + w$
 
-Coordinates are those of Stage 8: $`x = [p - p_{\text{ref}},\ v,\ q_x\, q_y\, q_z,\ \omega]`$,
-$u = f - f_{\text{hover}}$.
+Coordinates are those of Stage 8: $`x = [p - p_{\text{ref}},\ v,\ q_x\, q_y\, q_z,\ \omega,\ f - f_{\text{hover}}]`$,
+$u = f_{\text{cmd}} - f_{\text{hover}}$. The rotor thrusts $f$ lag the commands ($\tau_m = 30$ ms)
+and are part of the state, so $K$ feeds them back too; here they are known exactly.
 
 - **Disturbance.** $`d = [d_f;\ d_\tau] \sim \mathcal N(0, \Sigma_d)`$ with $\sigma_f = 0.5$ N
   (≈ 5 % of the weight) and $\sigma_\tau = 5 \cdot 10^{-3}$ N·m, drawn anew at every sample.
 - **$\Sigma_w$.** $w = G_d\, d$ with $G_d = \partial F / \partial d$ at hover, the Jacobian of the
-  plant's own RK4 step, so $\Sigma_w = G_d \Sigma_d G_d^\top$.
-- **What is left out.** The linearization error of Stage 8 is *not* in $\Sigma_w$: it is neither
-  zero-mean nor independent of $x$. The tilt chance constraint keeps the plant where that error is
-  small, and the checks below are done on the nonlinear plant.
+  rotor plant's own RK4 step, so $\Sigma_w = G_d \Sigma_d G_d^\top$. Its thrust rows are zero: $d$
+  acts on $\dot v$ and $\dot\omega$, not on the rotors. The thrust part of $\Sigma_e(k)$ only builds
+  up through the feedback, from $k = 2$ on.
+- **What is left out.** The linearization error of Stage 8 is *not* in $\Sigma_w$: neither the
+  rigid-body part nor the rotor loop (quadratic in the command lead, [Stage 8 §2](stage8_tube.md#the-rotor-loop-and-the-command-lead)).
+  It is neither zero-mean nor independent of $x$. The tilt chance constraint keeps the plant where
+  that error is small, and the checks below are done on the nonlinear rotor plant.
 
 Constraints:
 
@@ -118,16 +124,18 @@ Constraints:
 |---|---|---|
 | wall | $`p_x - p_{\text{ref},x} \le -0.10`$ m | 0.05 |
 | tilt (4 rows) | $\lvert q_x \rvert, \lvert q_y \rvert \le 0.15$ (≈ 17°) | 0.05 each |
-| motors (8 rows) | $0 \le f_i \le F_{\max}$ | hard at $k = 0$, 0.05 for $k \ge 1$ |
+| commands (8 rows) | $F_{\min} \le f_{\text{cmd},i} \le F_{\max}$ (the rotor plant clips to this box) | hard at $k = 0$, 0.05 for $k \ge 1$ |
 
-Offline result (`compute_smpc_params.py`): $\rho(A_K) = 0.953$; the wall back-off grows from 1 mm
-at $k = 1$ to 67 mm at $k = N$ (stationary value 67.4 mm), the tilt bound shrinks from 0.150 to
-0.136, the motor box by at most 0.17 N.
+Offline result (`compute_smpc_params.py`): $\rho(A_K) = 0.960$; the wall back-off grows from 1 mm
+at $k = 1$ to 72 mm at $k = N$ (stationary value 72.2 mm), the tilt bound shrinks from 0.150 to
+0.136, the command box by at most 0.16 N. On the 13-state model (thrusts as input) the stationary
+wall back-off was 67 mm: the thrust lag makes the feedback slightly slower.
 
-**Self-test** (`--check`): 20 000 realizations of the error system through the nonlinear plant,
-open loop over the horizon. The sample standard deviations match $`\sqrt{G \Sigma_e G^\top}`$
-within 1.6 %, and the coverage $`\Pr\{G_j e(k) \le \kappa \sigma_{j,k}\}`$ is 0.946–0.954 for the
-target 0.95. This is the statement the tightening rests on, and it holds on the nonlinear plant.
+**Self-test** (`--check`): 20 000 realizations of the error system through the nonlinear rotor
+plant, open loop over the horizon. The sample standard deviations match $`\sqrt{G \Sigma_e G^\top}`$
+within 1.6 % (inputs: 0.984–1.012), and the coverage $`\Pr\{G_j e(k) \le \kappa \sigma_{j,k}\}`$ is
+0.946–0.954 for the target 0.95. The sample mean stays within 0.04 σ of zero. This is the statement
+the tightening rests on, and it holds on the nonlinear plant.
 
 ## 4. Feasibility
 
@@ -147,7 +155,8 @@ the tightened problem is feasible, and the OCP stays solvable otherwise. The inp
 
 ## 6. Scenario
 
-The drone starts at rest 1.5 m in front of the wall. The target hover point lies 0.1 m **behind**
+The drone starts at rest, rotors at hover speed, 1.5 m in front of the wall. The target hover
+point lies 0.1 m **behind**
 the wall, so the cost pushes against the chance constraint for the whole run. A probability cannot
 be checked on one run: 300 independent closed loops (seeds 0–299, 10 s each) give the violation
 frequency at every sample.
@@ -157,13 +166,14 @@ frequency at every sample.
 | Quantity | Value |
 |---|---|
 | OCP status ≠ 0 | 0 / 60 000 |
-| Solves that needed the soft rows | 20 / 60 000 (largest slack 3.5 mm) |
+| Solves that needed the soft rows | 31 / 60 000 (largest slack 5.4 mm) |
 | Wall violation frequency, worst sample | 0.33 % (β = 5 %) |
-| Wall violation frequency, mean for $t \ge 4$ s | 0.01 % |
-| Tilt violation frequency | 0 on all four rows |
-| Motor thrusts | 0.000 … 5.805 N, inside $[0, 7.357]$ |
-| Distance to the wall, $t \ge 4$ s | mean 50 mm, std 23 mm |
-| Solver time | ≈ 3 ms per call (one SQP step, ≤ 29 QP iterations) |
+| Wall violation frequency, mean for $t \ge 4$ s | 0.02 % |
+| Tilt violation frequency, worst sample | 0.33 % on $-q_y$ (one run), 0 on the other three rows |
+| Thrust commands | 0.074 … 7.357 N, inside $[F_{\min}, F_{\max}] = [0.074, 7.357]$ |
+| Commands on the box | 0.01 % of the samples (6 of 60 000, in 5 runs, all at $t \in [3.0, 6.75]$ s) |
+| Distance to the wall, $t \ge 4$ s | mean 55 mm, std 25 mm |
+| Solver time | mean 6 ms, max 56 ms (one SQP step; wall-clock on WSL, the max is a single outlier) |
 
 ![chance constraints](../results/stage9_smpc/chance_constraints.png)
 
@@ -191,19 +201,23 @@ time for both factors.
 - **The closed loop is far below $\beta$.** The prediction is exact (self-test: coverage 0.95),
   but it describes the open-loop policy $v + Ke$ over the horizon. In closed loop the MPC
   re-plans from the measured state at every sample, which acts as a stiffer feedback near the
-  active constraint: the measured standard deviation at the wall is 23 mm, the predicted
-  stationary one 41 mm. The drone hovers 50 mm from the wall, about 2.2 measured standard
+  active constraint: the measured standard deviation at the wall is 25 mm, the predicted
+  stationary one 44 mm. The drone hovers 55 mm from the wall, about 2.2 measured standard
   deviations. Using the open-loop covariance for a closed-loop controller is the known source of
   conservatism of this formulation.
 - **The price of re-planning near the wall** is visible in the tilt panels: single realizations
   show short tilt spikes in steady state, when a gust pushes towards the wall and the soft
-  constraint is close to active.
-- **No recursive-feasibility guarantee.** 20 of 60 000 solves needed the slack. With bounded
+  constraint is close to active. In 5 of 300 runs such a spike drives a command onto the box
+  for one sample; the box is hard at $k = 0$, so the command stays inside it.
+- **No recursive-feasibility guarantee.** 31 of 60 000 solves needed the slack. With bounded
   support or an interpolated initial state this can be proven ([§4](#4-feasibility)).
 - **Gaussian assumption.** The factor $\Phi^{-1}(1-\beta)$ is exact only for Gaussian $w$. For an
   unknown distribution the Cantelli factor gives the guarantee at 2.6× the back-off.
 - **Linear model.** $\Sigma_w$ contains the effect of $d$ only. The match in the self-test holds
-  for tilt up to ≈ 17°; a larger envelope would need the linearization error in the model.
+  for tilt up to ≈ 17° and for the rotor loop at these gusts; a larger envelope would need the
+  linearization error in the model.
+- **Thrust is fed back.** $K$ uses the rotor thrusts. Without rpm telemetry they come from an
+  estimator (Stage 4), and the estimation error adds to $\Sigma_e$.
 - **Per-row constraints.** Each row holds with its own probability; the probability that *all*
   rows hold at once (a joint chance constraint) is lower and is not constrained.
 
@@ -215,12 +229,12 @@ time for both factors.
 | `ocp_config_smpc.py` | OCP: `create_solver()`, `set_tightening()`, `solve()`, `shifted_plan()`, `warm_start()` |
 | `simulate_smpc.py` | entry point: scenario, `run_once()`, Monte Carlo, `violation_frequency()`, `summarize()`, figures → `results/stage9_smpc/` |
 | `data/smpc_params.npz` | $A, B, G_d, \Sigma_w, K, P, \Sigma_e(k), \theta_k, \eta_k$, cost |
-| `plot_utils.py` | `plot_smpc_chance()`, `plot_smpc_prediction()` (new) |
+| `plot_utils.py` | `plot_smpc_chance()`, `plot_smpc_prediction()` |
 
 ```bash
 ./run.sh stage9_smpc/compute_smpc_params.py  # → data/smpc_params.npz
 ./run.sh stage9_smpc/compute_smpc_params.py --check  # self-test: covariance and coverage on the nonlinear plant
-./run.sh stage9_smpc/simulate_smpc.py       # → results/stage9_smpc/ (300 runs, ≈ 5 min)
+./run.sh stage9_smpc/simulate_smpc.py       # → results/stage9_smpc/ (300 runs, several minutes)
 QUAD_PLOTS=none ./run.sh stage9_smpc/simulate_smpc.py  # save only, no windows
 ```
 

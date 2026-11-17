@@ -30,6 +30,7 @@ nonlinear robust MPC theory is used.
 | Solver | acados `SQP`, exact Hessian, `PARTIAL_CONDENSING_HPIPM`, `DISCRETE` dynamics |
 | Offline | `compute_tube_params.py` → `data/tube_params.npz` |
 | Entry point | `./run.sh stage8_tube/simulate_tube.py` → `results/stage8_tube/` |
+| Git tag | `stage8` (13-state model; tag `rigid-body` = all stages before the motor dynamics) |
 
 ---
 
