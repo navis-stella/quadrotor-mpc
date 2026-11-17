@@ -12,8 +12,9 @@ Single source of the physics for every stage. Contains:
   - Measurement model y = [p; q; ω]     (sensor, EKF, MHE, observability)
   - Hover point + linearization         (QIH / DARE terminal cost, observability)
   - AcadosSimSolver plant               (one plant for every stage)
-  - Tracking model x̃ = [x; p_a]          (Stage 5 tracking MPC: artificial
-                                          reference as constant extra state)
+  - Tracking model x̃ = [x; f; p_a]       (Stage 5 tracking MPC on the motor
+                                          model: artificial reference as
+                                          constant extra state)
   - Motor dynamics                      (thrust COMMAND as input: MPC model
                                           [x; f] with ḟ = (f_cmd − f)/τ_m,
                                           plant [x; Ω] with rotor-speed loop
@@ -531,57 +532,65 @@ def create_disturbance_plant(Ts: float) -> AcadosSimSolver:
 # Tracking Model  (Stage 5 — artificial reference)
 # ═════════════════════════════════════════════════════════════════
 NA  = 3          # artificial reference y_a = p_a (hover position; yaw fixed at 0)
-NXA = NX + NA    # 16 — tracking-MPC state x̃ = [x; p_a]
+NXA = NX + NM + NA   # 20 — tracking-MPC state x̃ = [x (13); f (4); p_a (3)]  (motor model)
 
-# Terminal equality x_N = x_a(p_a) is imposed on these 12 entries of x.
+# Terminal equality x_N = x_a(p_a) is imposed on these 16 entries of [x; f].
 # qw is left out: the dynamics keep ‖q‖ = 1, so with qx = qy = qz = 0
 # fixed, qw = 1 follows. Constraining all 4 quaternion entries would give
 # 4 equality rows with only rank 3 → LICQ fails and HPIPM struggles.
-IDX_TERM_EQ = np.array([0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12])
+# The thrust STATES are included: on the motor model x_N is a steady state
+# only if the rotors also sit at the steady thrust (f_N = f_hover).
+IDX_TERM_EQ = np.array([0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])
 
 
 def steady_state_map(p_a: np.ndarray):
     """
     Steady-state mapping g(y_a) of the tracking MPC (parametrizes the
-    steady states by y_a, as in Limon et al., IEEE TAC 2018), nominal d = 0:
+    steady states by y_a, as in Limon et al., IEEE TAC 2018), nominal d = 0,
+    on the motor model:
 
-        y_a = p_a  ↦  x_a = [p_a, v = 0, q = [1,0,0,0], ω = 0],   u_a = f_hover·1
+        y_a = p_a  ↦  x_a = [p_a, v = 0, q = [1,0,0,0], ω = 0, f = f_hover·1],
+                      u_a = f_cmd = f_hover·1
 
-    Every hover point is a steady state; f_hover = F_MAX / 3 lies strictly
-    inside [0, F_MAX], so (x_a, u_a) is a STRICTLY feasible steady state.
-    g is affine in p_a → Lipschitz with L_g = 1.
+    At rest the thrust state equals the command (ḟ = 0). Every hover point
+    is a steady state; f_hover lies strictly inside [F_MIN, F_MAX], so
+    (x_a, u_a) is a STRICTLY feasible steady state. g is affine in p_a →
+    Lipschitz with L_g = 1.
 
     One definition for both uses: a NumPy p_a gives arrays (simulation,
     plots), a CasADi p_a gives expressions (the tracking-MPC cost), so the
     OCP and the simulation can never disagree on g.
 
     Returns:
-        x_a (13,), u_a (4,)    — ndarray, or ca.SX/MX/DM for a CasADi p_a
+        x_a (17,), u_a (4,)    — ndarray, or ca.SX/MX/DM for a CasADi p_a
     """
     if isinstance(p_a, (ca.SX, ca.MX)):
-        x_a = ca.vertcat(p_a, ca.DM.zeros(3), ca.DM([1, 0, 0, 0]), ca.DM.zeros(3))
+        x_a = ca.vertcat(p_a, ca.DM.zeros(3), ca.DM([1, 0, 0, 0]), ca.DM.zeros(3),
+                         ca.DM(np.full(NM, f_hover)))
         return x_a, ca.DM(np.full(NU, f_hover))
-    x_a = np.zeros(NX)
-    x_a[0:3] = p_a
-    x_a[6]   = 1.0
+    x_a = np.zeros(NXM)
+    x_a[0:3]    = p_a
+    x_a[6]      = 1.0
+    x_a[NX:NXM] = f_hover
     return x_a, np.full(NU, f_hover)
 
 
 def create_tracking_model() -> AcadosModel:
     """
-    Nominal dynamics augmented with the artificial reference as a state:
+    Motor-dynamics model augmented with the artificial reference as a state:
 
-        x̃ = [x (13); p_a (3)],     ẋ = f(x, u),     ṗ_a = 0
+        x̃ = [x (13); f (4); p_a (3)],   [ẋ; ḟ] = thrust-lag model,   ṗ_a = 0
 
-    acados has no 'global' decision variable shared by all shooting nodes.
-    Making p_a a state with zero dynamics gives exactly that: its value at
-    node 0 is free (only x is fixed by the initial condition) and the
-    dynamics copy it unchanged to every node — one decision variable p_a.
+    input f_cmd (4). acados has no 'global' decision variable shared by all
+    shooting nodes. Making p_a a state with zero dynamics gives exactly
+    that: its value at node 0 is free (only [x; f] is fixed by the initial
+    condition) and the dynamics copy it unchanged to every node — one
+    decision variable p_a.
 
     The reference r is NOT part of the model; the OCP adds it as parameter
     (it only enters the offset cost V_o, never a constraint).
     """
-    s   = _build_core_symbols()
+    s   = _build_thrust_lag_symbols()
     p_a = ca.SX.sym('p_a', NA)
 
     model             = AcadosModel()
@@ -589,7 +598,7 @@ def create_tracking_model() -> AcadosModel:
     model.x           = ca.vertcat(s['x'], p_a)
     model.u           = s['u']
     model.xdot        = ca.SX.sym('xdot', NXA)
-    model.f_expl_expr = ca.vertcat(_build_f_expl(s), ca.SX.zeros(NA))
+    model.f_expl_expr = ca.vertcat(_build_thrust_lag_f_expl(s), ca.SX.zeros(NA))
 
     return model
 
