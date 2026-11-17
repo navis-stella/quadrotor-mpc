@@ -16,11 +16,12 @@ discrete-time control barrier function.
 
 | | |
 |---|---|
-| Model / plant | `create_disturbance_model()` with $\hat d = 0$ / `create_disturbance_plant()`, no disturbance |
-| Feedback | full state, $\hat x = x$ |
+| Git tag | `stage7` (13-state model; tag `rigid-body` = all stages before the motor dynamics) |
+| Model / plant | motor dynamics: Stage 6 thrust-lag OCP with $\hat d = 0$, rotor-speed plant (`create_rotor_plant()`), no disturbance ([model](quadrotor_model.md)) |
+| Feedback | full state, $\hat x = [x;\, k_f \Omega^2]$ |
 | Horizon | $N = 20$, $T = 1$ s, $T_s = 0.05$ s (as Stage 6) |
-| Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4, shifted and projected warm start |
-| Reference | Stage 6 helix + flatness map, unchanged (2 m/s, 3 turns, 22.85 s) |
+| Solver | acados `SQP_RTI`, `PARTIAL_CONDENSING_HPIPM`, Gauss-Newton, ERK4 (2 steps), shifted and projected warm start |
+| Reference | Stage 6 helix + flatness map with thrust commands (`motor_horizon`; 2 m/s, 3 turns, 22.85 s) |
 | Obstacles | 3 infinite vertical cylinders, radius 0.2 m |
 | Entry point | `./run.sh stage7_obstacle/simulate_obst_dist.py` → `results/stage7a_obst_dist/` |
 
@@ -35,12 +36,13 @@ radius and $p$ is treated as a point. The OCP gets
 ```math
 \begin{aligned}
 \min_{u_0, \dots, u_{N-1}} \quad & \sum_{i=0}^{N-1} \Big( \lVert e(x_i, x_{r,i}) \rVert_Q^2 + \lVert u_i - u_{r,i} \rVert_R^2 \Big) + \lVert e(x_N, x_{r,N}) \rVert_P^2
-\\ \text{s.t.} \quad & x_{i+1} = f(x_i, u_i, 0), \qquad x_0 = x(t), \qquad 0 \le u_i \le F_{\max}
+\\ \text{s.t.} \quad & x_{i+1} = f(x_i, u_i, 0), \qquad x_0 = x(t), \qquad F_{\min} \le u_i \le F_{\max}
 \\ & h_j(p_i) \ge 0, \qquad i = 1, \dots, N, \quad j = 1, \dots, n_{\text{obs}}
 \end{aligned}
 ```
 
-with the cost, the dynamics and the soft rate bound of Stage 6 unchanged.
+with the cost, the dynamics (thrust-lag model, $x = [\text{body};\, f]$, $u = f_{\text{cmd}}$) and the soft rate
+bound of Stage 6 unchanged.
 
 **Constraint, not cost.** The obstacle could also enter the cost as a repulsive term
 ("potential field"). Such a term changes the optimum even when the obstacle is far away and gives
@@ -120,7 +122,7 @@ enters it by
 r - \sqrt{r^2 - \ell^2/4} \;\approx\; \frac{\ell^2}{8 r} .
 ```
 
-At $v = 2$ m/s, $T_s = 0.05$ s and $r_{\text{safe}} = 0.5$ m this is about 2.5 mm (4 mm at the
+At $v = 2$ m/s, $T_s = 0.05$ s and $r_{\text{safe}} = 0.5$ m this is about 2.5 mm (3.3 mm at the
 peak speed of the swerves). The margin $\delta = 5$ cm covers it many times over; in this nominal
 setting it is the safety distance the constraint keeps.
 
@@ -184,18 +186,18 @@ The remaining slack in this table is the penalty-weight effect of [§4](#4-soft-
 | no constraint at node 0 | `con_h_expr_0` left empty: $x_0$ is fixed, a violated $h$ there could only make the QP infeasible |
 | slack $s_{j,i}$ | `idxsh` / `idxsh_e`; `zl`, `Zl` appended after the three $\lvert\omega\rvert$ slacks (acados orders slacks `bu, bx, g, h`) |
 | one-sided bound | `uh = ACADOS_INFTY` ($10^{10}$): HPIPM masks it out |
-| pillar positions | compiled into the solver as constants — the parameter stays $`p_i = [\,\hat d;\; x_{r,i};\; u_{r,i}\,]`$ |
+| pillar positions | compiled into the solver as constants — the parameter stays $`p_i = [\,\hat d;\; x_{r,i};\; u_{r,i}\,]`$ (27 entries) |
 
-To reuse the Stage 6 problem without copying it, `ocp_config_trajectory.create_solver` was split
+To reuse the Stage 6 problem without copying it, `ocp_config_trajectory.create_solver` is split
 into `create_ocp` (the uncompiled `AcadosOcp`) and `create_solver` (compile). Stage 6 itself is
-unchanged: its nominal run reproduces the same numbers and byte-identical figures.
+unchanged by Stage 7: its nominal run reproduces byte-identical figures.
 
 ## 7. Scenario
 
 ```
-(X_r, U_r)_k = flatness( helix(t_k + i·Ts) ),  i = 0..N          Stage 6, unchanged
+(X_r, U_r)_k = flatness( helix(t_k + i·Ts) ),  i = 0..N          Stage 6 (motor_horizon)
 u_k          = MPC(x_k, X_r, U_r)            soft h_j(p_i) ≥ 0, i = 1..N, projected warm start
-x_{k+1}      = plant(x_k, u_k)               nominal, full state feedback
+x_{k+1}      = plant(x_k, u_k)               rotor plant, nominal, full state feedback
 ```
 
 The pillars stand at three phase angles $\theta$ of the helix, each **off-centre** by 0.15 m:
@@ -223,14 +225,21 @@ All figures are in `results/stage7a_obst_dist/`; the numbers are printed by `sum
 
 | Metric | Value |
 |---|---|
+| failed OCP calls | 0 / 457 |
 | min gap to a pillar, at the samples | 50.0 mm ($= \delta$) |
-| min gap between the samples (straight segments) | 47.6 mm |
-| max pillar slack | $2 \cdot 10^{-11}$ m² |
-| $\lVert p - p_r \rVert$ RMS / max | 188 / 378 mm (deliberate) |
-| max tilt | 25.9° (reference 17.5°) |
-| max $\lvert\omega\rvert$ | 1.80 rad/s (soft bound 1.80) |
-| motor thrusts | $`[1.38,\, 4.37]`$ N, never saturated |
-| MPC time mean / p99 / max | 5.2 / 10.8 / 16.3 ms (budget 50 ms) |
+| min gap between the samples (straight segments) | 47.4 mm |
+| max pillar slack | $5 \cdot 10^{-12}$ m² |
+| $\lVert p - p_r \rVert$ RMS / max | 176 / 351 mm (deliberate) |
+| max tilt | 26.4° (reference 17.5°) |
+| max $\lvert\omega\rvert$ | 1.02 rad/s (soft bound 1.70, never reached) |
+| thrust commands / rotor thrust | $`[2.07,\, 5.22]`$ / $`[2.08,\, 4.81]`$ N, never saturated |
+| MPC time mean / p99 / max | 8.7 / 15.2 / 21.8 ms (budget 50 ms) |
+
+Compared with the 13-state version (tag `stage7`: 188 / 378 mm, 25.9° tilt, body rates at the
+1.8 rad/s bound in 1.7 % of the samples) the flight keeps the same margin and sides but swerves
+more gently: the body rates stay at 1.02 rad/s. Several changes of Stages 1–6 act together here and
+are not separated: the $T_s$-scaled DARE terminal cost (20× smaller than the old unscaled one), the
+Stage 1 weights, and the thrust lag itself.
 
 ### 8.1 Top view
 
@@ -239,7 +248,7 @@ All figures are in `results/stage7a_obst_dist/`; the numbers are printed by `sum
 </p>
 
 The three turns lie on top of each other in this view. P1 and P3 are passed on the inside of the
-helix (radius 1.66 m at the crossing), P2 on the outside (2.34 m) — the near sides of [§7](#7-scenario), 0.35 m
+helix (radius 1.65 m at the crossing), P2 on the outside (2.35 m) — the near sides of [§7](#7-scenario), 0.35 m
 from the reference. The green curves are the MPC predictions at the first solve that sees each
 pillar: the end of the horizon already bends around the dotted constraint circle while the
 quadrotor is still on the reference.
@@ -264,12 +273,11 @@ $\sim 10^{-11}$ m², i.e. the soft constraint behaved as a hard one.
 ![tracking error](../results/stage7a_obst_dist/tracking_error.png)
 
 - Until $t \approx 5.5$ s (take-off and spiral-out) the error is that of Stage 6 nominal,
-  below 0.2 mm. Then P1 enters the horizon.
-- The quadrotor leaves the reference about 1 s (one horizon) before each crossing. The error peaks
-  at 0.35–0.38 m around the crossings (dotted lines): the 0.35 m radial offset plus a small lag
-  along the path.
-- Between P3 and P1 the error falls back to below 1 mm; between P1, P2 and P3 it does not drop below
-  2 cm ([§8.1](#81-top-view)).
+  below 0.1 mm. Then P1 enters the horizon.
+- The quadrotor leaves the reference (by more than 1 cm) 0.9 s before the first crossing, about one
+  horizon. The error peaks at 0.35 m around every crossing (dotted lines): the 0.35 m radial offset.
+- Between P3 and P1 the error falls back to about 2 mm; between P1 and P2 it does not drop below
+  3 cm ([§8.1](#81-top-view)).
 - The attitude error reaches 16°: swerving 0.35 m within about 1 s at 2 m/s takes lateral
   acceleration on top of the centripetal 2 m/s².
 
@@ -289,18 +297,16 @@ the top view shows the true horizontal clearance.
 
 ![inputs](../results/stage7a_obst_dist/inputs.png)
 
-- Roll reaches 25.6° and pitch 18.5° during the swerves, against 17.5° on the reference.
-- The body rates touch the soft bound 1.8 rad/s in 8 samples (1.7 %), at the moment a pillar
-  enters the horizon and the swerve starts. The rate bound — kept from Stage 6 — is what limits
-  how late the quadrotor can react.
-- The motor thrusts stay in $`[1.38,\, 4.37]`$ N, far from both limits $`[0,\, 7.36]`$ N.
+- Roll reaches 25.3° and pitch 17.4° during the swerves, against 17.5° on the reference.
+- The body rates stay at or below 1.02 rad/s, never at the soft bound of 1.7 rad/s.
+- The thrust commands stay in $`[2.07,\, 5.22]`$ N and the rotor thrust in $`[2.08,\, 4.81]`$ N, far from
+  both limits $`[0.07,\, 7.36]`$ N. The rotors smooth the command steps through the speed loop.
 
 ### 8.6 Computation time
 
-The mean MPC time rises from 4.0 ms (Stage 6 nominal) to 5.2 ms. In 46 % of the solves at least
-one predicted node is on a constraint circle (an active constraint); those solves take 5.5 ms on
-average, the others 4.9 ms. The maximum, 16 ms, stays far below the 50 ms sample time. As in
-Stage 6, the times are wall-clock times on WSL and vary between runs.
+The mean MPC time rises from 4.9 ms (Stage 6 nominal) to 8.7 ms, with the flatness map run three
+times per call (Stage 6) and three constraint rows per node. The maximum, 22 ms, stays below the
+50 ms sample time. As in Stage 6, the times are wall-clock times on WSL and vary between runs.
 
 ## 9. Observations and limitations
 
@@ -323,6 +329,12 @@ Stage 6, the times are wall-clock times on WSL and vary between runs.
   alone resolves the conflict.
 
 ## 10. Experiments: taking the design apart
+
+> **Measured on the 13-state model** (tag `stage7`) and not repeated on the motor model. The
+> mechanisms they show — where SQP linearizes, when a soft constraint is exact, what a shorter
+> horizon costs, the arbitrary side of a symmetric obstacle — do not depend on the thrust lag, but
+> the exact numbers, in particular the rate-bound percentages, would differ. The 13-state rate
+> bound was 1.8 rad/s.
 
 The main run works partly because of design choices that [§4](#4-soft-constraint-and-exact-penalty)–[§7](#7-scenario) justify: projected warm start,
 slack weight, pillar offsets, horizon, soft constraint. Five experiments switch one of them off at
@@ -449,12 +461,19 @@ reports a dimension error.
 | `ocp_config_obstacle.py` | `Pillar`, `h_pillars()`, `add_pillar_constraints()`, `create_solver()`, projected `shift_warm_start()`, `clearance()`, `clearance_between_samples()`, `obstacle_slack()` |
 | `closed_loop.py` | scene (`PILLAR_SITES`), closed loop `simulate(gamma=None)`, `summarize()`, `make_figures()` — shared with Stage 7b |
 | `simulate_obst_dist.py` | entry point: `simulate()` with the distance constraint → `results/stage7a_obst_dist/` |
-| `ocp_config_trajectory.py` | Stage 6 OCP, now split into `create_ocp()` + `create_solver()` (unchanged result) |
+| `ocp_config_trajectory.py` | Stage 6 OCP (motor model), split into `create_ocp()` + `create_solver()` |
 | `plot_utils.py` | `plot_obstacle_topview()`, `plot_obstacle_clearance()` (new); `plot_3d_trajectory(..., cylinders=)` |
 
 ```bash
 ./run.sh stage7_obstacle/simulate_obst_dist.py   # → results/stage7a_obst_dist/
 QUAD_PLOTS=none ./run.sh stage7_obstacle/simulate_obst_dist.py  # save only, no windows
+```
+
+The 13-state version from its tag:
+
+```bash
+git checkout stage7
+./run.sh simulate_obst_dist.py
 ```
 
 ## References

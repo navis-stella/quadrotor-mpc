@@ -11,10 +11,10 @@ constraint:
     simulate_obst_dist.py   Stage 7a  distance constraint  hⱼ(p_i) ≥ 0
     simulate_obst_dcbf.py   Stage 7b  DCBF  hⱼ(x_{i+1}) ≥ (1 − γ)·hⱼ(x_i), γ sweep
 
-    plant        nominal (d = 0)
-    feedback     full state, x̂ = x, d̂ = 0
-    reference    Stage 6 helix + flatness (x_r, u_r), unchanged
-    controller   Stage 6 tracking NMPC + soft pillar constraints
+    plant        rotor-speed plant [x; Ω], nominal (d = 0), 5 substeps per Ts
+    feedback     full state, x̂ = [x; k_f Ω²], d̂ = 0
+    reference    Stage 6 helix + flatness, motor_horizon: [x_r; f_r], f_cmd,r
+    controller   Stage 6 tracking NMPC (thrust-lag model) + soft pillar constraints
                  (ocp_config_obstacle: gamma=None → distance, gamma=γ → DCBF)
 
     Full state feedback on purpose: the constraint acts on the state the
@@ -42,10 +42,10 @@ Loop (Ts = 0.05 s, MPC horizon 1 s, N = 20 — as Stage 6):
 
 Imports:
     reference_generate.py     → HelixReference
-    reference_flatness.py     → flat_to_state_input
+    reference_flatness.py     → motor_horizon
     ocp_config_obstacle.py    → Pillar, create_solver, projected shift_warm_start, clearance
     ocp_config_trajectory.py  → runtime helpers (init_guess, set_trajectory, ...)
-    stage4 closed_loop.py     → OMEGA_MPC  (same soft |ω| box as Stage 6)
+    stage4 closed_loop.py     → OMEGA_MPC_MOTOR  (same soft |ω| box as Stage 6)
 
 Shared by both stages: the scene (PILLARS), the closed loop
 simulate(gamma=), encounters, summarize and make_figures (six figures).
@@ -59,14 +59,17 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_model                      import (create_disturbance_plant, quat_normalize,
-                                                       OMEGA_MAX, F_MAX, NX, NU, ND)
+from core.quadrotor_model                      import (create_rotor_plant, rotor_to_thrust_state,
+                                                       thrust_to_rotor_state, thrust_from_rotor,
+                                                       quat_normalize,
+                                                       OMEGA_MAX, F_MIN, F_MAX, NX, NXM, NU, ND)
 from stage6_trajectory.reference_generate      import HelixReference
-from stage6_trajectory.reference_flatness      import flat_to_state_input
+from stage6_trajectory.reference_flatness      import motor_horizon
 import stage6_trajectory.ocp_config_trajectory as traj
 import stage7_obstacle.ocp_config_obstacle     as obs
 from stage7_obstacle.ocp_config_obstacle       import Pillar, R_DRONE, MARGIN
-from stage4_estimation.closed_loop             import OMEGA_MPC
+from stage4_estimation.closed_loop             import OMEGA_MPC_MOTOR
+from stage1_basic.simulate_basic               import N_SUB
 from core.plot_utils                           import (plot_states, plot_inputs, plot_3d_trajectory,
                                                        plot_tracking_error, plot_obstacle_topview,
                                                        plot_obstacle_clearance)
@@ -107,25 +110,28 @@ def simulate(gamma: float = None, verbose: bool = True) -> dict:
     """
     gamma=None: distance constraint (7a);  gamma=γ: DCBF (7b).
 
-    Returns dict with X (n+1, 13), X_r (n, 13), U (n, 4), U_r (n, 4),
-    status (n,), T_mpc (n,) [s], slack (n,) largest pillar slack per solve,
-    P_pred (n, N+1, 3) predicted positions of every solve, gamma.
+    Returns dict with X (n+1, 17) = [x; f = k_f Ω²], X_r (n, 17), U (n, 4)
+    thrust commands, U_r (n, 4), F_act (n·N_SUB+1, 4) rotor thrust every
+    Ts/N_SUB, status (n,), T_mpc (n,) [s], slack (n,) largest pillar slack
+    per solve, P_pred (n, N+1, 3) predicted positions of every solve, gamma.
 
     T_mpc covers flatness map + reference setting + solve. A failed solve
-    (status ∉ {0, 2}) is counted; its first input is still applied, clipped
-    to the motor limits (u_r if not finite).
+    (status ∉ {0, 2}) is counted; its first command is still applied,
+    clipped to the motor limits (u_r if not finite).
     """
-    x0 = flat_to_state_input(REF.sample(0.0)).x_r    # at rest at the origin
+    X_r0, U_r0 = motor_horizon(REF, 0.0, N, TS)
+    x0      = X_r0[0]                                # at rest at the origin, rotors at hover
+    x_plant = thrust_to_rotor_state(x0)
     kind = 'distance constraint' if gamma is None else f'DCBF, γ = {gamma:g}'
     print(f'Compiling acados NMPC solver (trajectory tracking + pillars, {kind})...')
-    solver = obs.create_solver(PILLARS, N, T_HORIZON, omega_max=OMEGA_MPC, gamma=gamma)
-    plant  = create_disturbance_plant(TS)
+    solver = obs.create_solver(PILLARS, N, T_HORIZON, omega_max=OMEGA_MPC_MOTOR, gamma=gamma)
+    plant  = create_rotor_plant(TS / N_SUB)
 
-    ref0 = flat_to_state_input(REF.horizon(0.0, N, TS))
-    traj.init_guess(solver, ref0.x_r, ref0.u_r, N)
+    traj.init_guess(solver, X_r0, U_r0, N)
 
-    X      = np.zeros((N_SIM + 1, NX)); X[0] = x0
-    X_r    = np.zeros((N_SIM, NX))
+    X      = np.zeros((N_SIM + 1, NXM)); X[0] = x0
+    X_r    = np.zeros((N_SIM, NXM))
+    F_act  = np.zeros((N_SIM * N_SUB + 1, NU)); F_act[0] = x0[NX:]
     U_r    = np.zeros((N_SIM, NU))
     U      = np.zeros((N_SIM, NU))
     status = np.zeros(N_SIM, dtype=int)
@@ -139,28 +145,31 @@ def simulate(gamma: float = None, verbose: bool = True) -> dict:
 
         # 1. Reference over the horizon + NMPC (full state feedback)
         t0  = time.perf_counter()
-        ref = flat_to_state_input(REF.horizon(t, N, TS))
+        Xr_h, Ur_h = motor_horizon(REF, t, N, TS)
         if k > 0:
-            obs.shift_warm_start(solver, ref.x_r, ref.u_r, N, PILLARS)
-        traj.set_trajectory(solver, ref.x_r, ref.u_r, d0, N)
+            obs.shift_warm_start(solver, Xr_h, Ur_h, N, PILLARS)
+        traj.set_trajectory(solver, Xr_h, Ur_h, d0, N)
         traj.set_initial_state(solver, X[k])
         status[k] = solver.solve()
         T_mpc[k]  = time.perf_counter() - t0
 
         u = solver.get(0, 'u')
         if not np.all(np.isfinite(u)):
-            u = ref.u_r[0]
-        U[k] = np.clip(u, 0.0, F_MAX)
-        X_r[k], U_r[k] = ref.x_r[0], ref.u_r[0]
+            u = Ur_h[0]
+        U[k] = np.clip(u, F_MIN, F_MAX)
+        X_r[k], U_r[k] = Xr_h[0], Ur_h[0]
         slack[k]  = obs.obstacle_slack(solver, N, NP_OBS, dcbf=gamma is not None)
         P_pred[k] = obs.predicted_positions(solver, N)
 
-        # 2. Nominal plant
-        plant.set('x', X[k])
-        plant.set('u', U[k])
-        plant.set('p', d0)
-        plant.solve()
-        X[k + 1] = quat_normalize(plant.get('x'))
+        # 2. Nominal rotor plant (N_SUB substeps, command held)
+        for j in range(N_SUB):
+            plant.set('x', x_plant)
+            plant.set('u', U[k])
+            plant.set('p', d0)
+            plant.solve()
+            x_plant = quat_normalize(plant.get('x'))
+            F_act[k * N_SUB + j + 1] = thrust_from_rotor(x_plant[NX:])
+        X[k + 1] = rotor_to_thrust_state(x_plant)
 
         if verbose and k % int(round(2.0 / TS)) == 0:
             gap = obs.clearance(X[k, :3], PILLARS).min()
@@ -168,7 +177,7 @@ def simulate(gamma: float = None, verbose: bool = True) -> dict:
                   f'{np.linalg.norm(X[k, :3] - X_r[k, :3]):.3f} m  |  '
                   f'min gap {gap:6.3f} m  |  status {status[k]}')
 
-    return dict(X=X, X_r=X_r, U=U, U_r=U_r, status=status, T_mpc=T_mpc,
+    return dict(X=X, X_r=X_r, U=U, U_r=U_r, F_act=F_act, status=status, T_mpc=T_mpc,
                 slack=slack, P_pred=P_pred, gamma=gamma)
 
 
@@ -218,7 +227,7 @@ def summarize(res: dict, title: str) -> None:
     gap_b = obs.clearance_between_samples(X[:, :3], PILLARS)
     e_p   = np.linalg.norm(X[:-1, :3] - X_r[:, :3], axis=1)
     fail  = ~np.isin(res['status'], [0, 2])
-    sat   = np.mean(np.any((U <= 1e-6) | (U >= F_MAX - 1e-6), axis=1))
+    sat   = np.mean(np.any((U <= F_MIN + 1e-6) | (U >= F_MAX - 1e-6), axis=1))
     T_mpc = res['T_mpc'] * 1e3
     v_max = np.linalg.norm(X[:, 3:6], axis=1).max()
     r_min = min(o.r_safe() for o in PILLARS)
@@ -239,10 +248,10 @@ def summarize(res: dict, title: str) -> None:
     print(f'    max pillar slack            : {res["slack"].max():.2e} m²')
     print(f'    ‖p − p_r‖  RMS / max        : {1e3 * np.sqrt(np.mean(e_p ** 2)):7.1f} /'
           f' {1e3 * e_p.max():7.1f} mm   (deliberate: the reference crosses pillars)')
-    print(f'    max |ω|                     : {np.abs(X[:, 10:]).max():.3f} rad/s'
-          f'   (soft bound {OMEGA_MPC:.2f}, envelope {OMEGA_MAX})')
-    print(f'    thrust range                : [{U.min():.3f}, {U.max():.3f}] N'
-          f'   (limits [0, {F_MAX:.3f}]), saturated {sat:.1%} of samples')
+    print(f'    max |ω|                     : {np.abs(X[:, 10:13]).max():.3f} rad/s'
+          f'   (soft bound {OMEGA_MPC_MOTOR:.2f}, envelope {OMEGA_MAX})')
+    print(f'    thrust command range        : [{U.min():.3f}, {U.max():.3f}] N'
+          f'   (limits [{F_MIN:.3f}, {F_MAX:.3f}]), saturated {sat:.1%} of samples')
     print(f'    MPC time mean / p99 / max   : {T_mpc.mean():.2f} / {np.percentile(T_mpc, 99):.2f}'
           f' / {T_mpc.max():.2f} ms   (flatness + solve, budget {1e3 * TS:.0f} ms)')
 
@@ -270,5 +279,6 @@ def make_figures(res: dict, out: str, title: str) -> None:
                        cylinders=cyl)
     plot_states(res['X'], TS, res['X_r'],
                 f'{title}: states vs reference x_r', os.path.join(out, 'states.png'))
-    plot_inputs(res['U'], TS, f'{title}: motor thrusts (dashed: u_r)',
-                os.path.join(out, 'inputs.png'), U_ref=res['U_r'])
+    plot_inputs(res['U'], TS, f'{title}: thrust commands, rotor thrust (dashed: u_r)',
+                os.path.join(out, 'inputs.png'), U_ref=res['U_r'],
+                F_act=res['F_act'], Ts_act=TS / N_SUB, f_bounds=(F_MIN, F_MAX))

@@ -230,10 +230,6 @@ $`x_N \leftarrow x_r(t + N T_s)`$. An unshifted guess would lag one sample behin
 reference. The very first call starts from the reference itself (`init_guess`), which is a
 trajectory of the model.
 
-**Stage 7 still uses the 13-state version.** Until Stage 7 moves to the motor model,
-`create_ocp(model='rigid')` builds the unchanged 13-state OCP, to which Stage 7 adds its obstacle
-constraints.
-
 ### Weights (identical to Stages 1–5)
 
 | | $p_{x,y}$ | $p_z$ | $v_{x,y}$ | $v_z$ | $\mathrm{vec}_{x,y}$ | $\mathrm{vec}_z$ | $\omega$ | $f$ | $f_{\text{cmd}}$ |
@@ -390,7 +386,7 @@ far within the budget.
 |---|---|
 | `reference_generate.py` | helix reference: `HelixParams`, `HelixReference.sample()` / `.horizon()`, self-test, `--plot` |
 | `reference_flatness.py` | flatness map `flat_to_state_input(ref, d_hat)` → $(x_r, u_r)$, open-loop self-test; `motor_horizon()` → $([x_r;\, f_r],\, f_{\text{cmd},r})$ |
-| `ocp_config_trajectory.py` | tracking OCP: `state_error()`, `create_solver()`, `set_trajectory()`, `shift_warm_start()`; `model='rigid'` for Stage 7 |
+| `ocp_config_trajectory.py` | tracking OCP: `state_error()`, `create_solver()`, `set_trajectory()`, `shift_warm_start()`; `create_ocp()` reused by Stage 7 |
 | `simulate_trajectory.py` | closed loop (MHE or `--nominal`), summary, figures |
 | `state_est_mhe.py` | the Stage 4b MHE (motor model), reused |
 | `plot_utils.py` | `plot_tracking_error()` (new); `plot_states` / `plot_3d_trajectory` accept a time-varying reference and noisy measurements, `plot_inputs` the feedforward $u_r$ |
