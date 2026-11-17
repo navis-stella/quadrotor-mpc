@@ -2,7 +2,9 @@
 simulate_tracking.py — Stage 5 Closed-Loop Tracking MPC with Artificial Reference
 =================================================================================
 The tracking MPC flies a piecewise-constant reference sequence on the
-nominal plant (no disturbance, full state feedback):
+nominal rotor-speed plant (no disturbance, full state feedback: the
+measured rotor speeds are handed to the MPC as thrusts f = k_f Ω², as in
+Stage 1):
 
     t =  0 s   r = ( 6, 0, 1)   6 m jump — not reachable within one 1 s horizon
     t =  5 s   r = ( 6, 6, 2)   another jump
@@ -14,8 +16,9 @@ Expected (Limon et al., IEEE TAC 2018):
                                 (convergence to the optimal reachable steady state)
 
 Imports:
-    quadrotor_model.py      → create_disturbance_plant() (p = 0 → nominal plant),
-                               quat_normalize(), steady_state_map(), NX, NU
+    quadrotor_model.py      → create_rotor_plant() (p = 0 → nominal plant),
+                               rotor_to_thrust_state(), thrust_from_rotor(),
+                               quat_normalize(), steady_state_map()
     ocp_config_tracking.py  → create_solver() + runtime helpers, Y_s, y_r*
     plot_utils.py           → plot_artificial_reference(), plot_states(),
                                plot_inputs(), plot_3d_trajectory()
@@ -29,8 +32,11 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_model import (create_disturbance_plant, quat_normalize,
-                                  steady_state_map, F_MAX, NX, NU)
+from core.quadrotor_model import (create_rotor_plant, rotor_plant_hover_state,
+                                  rotor_to_thrust_state, thrust_from_rotor,
+                                  quat_normalize, steady_state_map,
+                                  F_MIN, F_MAX, NX, NXM, NU)
+from stage1_basic.simulate_basic import N_SUB
 import stage5_tracking.ocp_config_tracking as track
 from core.plot_utils import (plot_artificial_reference, plot_states, plot_inputs,
                              plot_3d_trajectory)
@@ -68,25 +74,29 @@ def reference_at(t: float) -> np.ndarray:
 # ─────────────────────────────────────────────────────────────────
 def simulate() -> dict:
     """
-    Returns dict with X (n+1, 13), U (n, 4), P_a (n, 3), R (n, 3),
-    status (n,), T_solve (n,) [s].
+    Returns dict with X (n+1, 17) = [x; f = k_f Ω²], U (n, 4) thrust
+    commands, F_act (n·N_SUB+1, 4) rotor thrust every Ts/N_SUB, P_a (n, 3),
+    R (n, 3), status (n,), T_solve (n,) [s].
 
-    A failed solve (status ≠ 0) is counted, and its first input is still
+    A failed solve (status ≠ 0) is counted, and its first command is still
     applied, clipped to the motor limits (hover if not finite).
     """
-    x0, u_hover = steady_state_map(P0)
-    plant  = create_disturbance_plant(TS)         # p = 0 → nominal plant
+    _, u_hover = steady_state_map(P0)
+    x_plant = rotor_plant_hover_state()           # [x; Ω], hovering at P0 = origin
+    x_plant[:3] = P0
+    plant  = create_rotor_plant(TS / N_SUB)       # p = 0 → nominal plant
     solver = track.create_solver(N, T_HORIZON)
-    track.init_guess(solver, x0, N)
+    x = rotor_to_thrust_state(x_plant)            # measured [x; f]
+    track.init_guess(solver, x, N)
 
-    X   = np.zeros((N_SIM + 1, NX)); X[0] = x0
-    U   = np.zeros((N_SIM, NU))
-    P_a = np.zeros((N_SIM, 3))
-    R   = np.zeros((N_SIM, 3))
+    X     = np.zeros((N_SIM + 1, NXM)); X[0] = x
+    U     = np.zeros((N_SIM, NU))
+    F_act = np.zeros((N_SIM * N_SUB + 1, NU)); F_act[0] = x[NX:]
+    P_a   = np.zeros((N_SIM, 3))
+    R     = np.zeros((N_SIM, 3))
     status  = np.zeros(N_SIM, dtype=int)
     T_solve = np.zeros(N_SIM)
 
-    x = x0.copy()
     for k in range(N_SIM):
         r = reference_at(k * TS)
         R[k] = r
@@ -100,16 +110,19 @@ def simulate() -> dict:
         u = solver.get(0, 'u')
         if not np.all(np.isfinite(u)):
             u = u_hover
-        u = np.clip(u, 0.0, F_MAX)
+        u = np.clip(u, F_MIN, F_MAX)
         P_a[k] = track.get_artificial_reference(solver)
 
-        plant.set('x', x)
-        plant.set('u', u)
-        plant.solve()
-        x = quat_normalize(plant.get('x'))
+        for j in range(N_SUB):                    # command held over Ts
+            plant.set('x', x_plant)
+            plant.set('u', u)
+            plant.solve()
+            x_plant = quat_normalize(plant.get('x'))
+            F_act[k * N_SUB + j + 1] = thrust_from_rotor(x_plant[NX:])
+        x = rotor_to_thrust_state(x_plant)
         X[k + 1], U[k] = x, u
 
-    return dict(X=X, U=U, P_a=P_a, R=R, status=status, T_solve=T_solve)
+    return dict(X=X, U=U, F_act=F_act, P_a=P_a, R=R, status=status, T_solve=T_solve)
 
 
 def summarize(res: dict) -> None:
@@ -149,8 +162,9 @@ if __name__ == '__main__':
                 'Stage 5 — Tracking MPC: states (ref = final y_r*)',
                 os.path.join(RESULTS_DIR, 'states.png'))
     plot_inputs(res['U'], TS,
-                'Stage 5 — Tracking MPC: motor thrusts',
-                os.path.join(RESULTS_DIR, 'inputs.png'))
+                'Stage 5 — Tracking MPC: thrust commands and rotor thrust',
+                os.path.join(RESULTS_DIR, 'inputs.png'),
+                F_act=res['F_act'], Ts_act=TS / N_SUB, f_bounds=(F_MIN, F_MAX))
     plot_3d_trajectory(res['X'], x_final,
                        'Stage 5 — Tracking MPC: 3D trajectory',
                        os.path.join(RESULTS_DIR, 'trajectory_3d.png'))
