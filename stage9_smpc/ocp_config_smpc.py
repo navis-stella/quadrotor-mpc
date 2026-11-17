@@ -13,8 +13,9 @@ Control 2016):
     applied    u(t) = f_hover + v_0*
 
 Sets, gain and the tightened right-hand sides θ_k, η_k come from
-compute_smpc_params (data/smpc_params.npz); z, x are 12-dim deviations from
-the target hover point, v motor-thrust deviations.
+compute_smpc_params (data/smpc_params.npz); z, x are 16-dim deviations from
+the target hover point on the thrust-lag model ([p, v, qv, ω, f − f_hover]),
+v thrust-command deviations.
 
 The difference to the tube MPC of Stage 8 is the initial condition: z_0 = x(t)
 at EVERY step, so the predicted error starts at e(t|t) = 0 and θ_k, η_k depend
@@ -46,7 +47,7 @@ from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel, ACADOS_INFTY
 
 from core.quadrotor_model import NU
-from stage8_tube.compute_tube_params import NE_RIGID as NE   # 13-state until Stage 9 migrates
+from stage8_tube.compute_tube_params import NE
 from stage9_smpc.compute_smpc_params import load_smpc_params
 from core.codegen import build_path
 
@@ -59,7 +60,7 @@ BIG  = 1e6          # 'no constraint' for the state rows at node 0 (< ACADOS_INF
 # Model
 # ─────────────────────────────────────────────────────────────────
 def create_nominal_linear_model(A: np.ndarray, B: np.ndarray) -> AcadosModel:
-    """Discrete-time nominal (mean) model z⁺ = A z + B v (12 states, 4 inputs)."""
+    """Discrete-time nominal (mean) model z⁺ = A z + B v (16 states, 4 inputs)."""
     z = ca.SX.sym('z', NE)
     v = ca.SX.sym('v', NU)
     model               = AcadosModel()
@@ -153,8 +154,8 @@ def set_tightening(solver: AcadosOcpSolver, par: dict) -> None:
 # ─────────────────────────────────────────────────────────────────
 def solve(solver: AcadosOcpSolver, x: np.ndarray, N: int):
     """
-    Solve for the measured state x (12-dim deviation).
-    Returns (status, Z (N+1, 12), V (N, 4), largest state-row slack).
+    Solve for the measured state x (16-dim deviation).
+    Returns (status, Z (N+1, 16), V (N, 4), largest state-row slack).
     """
     solver.set(0, 'lbx', x)
     solver.set(0, 'ubx', x)

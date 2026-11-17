@@ -5,8 +5,8 @@ Regulation to a hover target that lies BEHIND a wall, under a Gaussian
 disturbance, with the stochastic MPC of ocp_config_smpc:
 
     OCP       z₀ = x(t),  G z_k ≤ θ_k,  H v_k ≤ η_k     (deterministic equivalent)
-    applied   u  = f_hover + v₀*(x(t))
-    plant     x⁺ = F(x, u, d),  d ~ N(0, Σ_d) i.i.d.     (nonlinear, RK4)
+    applied   u  = f_hover + v₀*(x(t))                   (thrust commands)
+    plant     x⁺ = F(x, u, d),  d ~ N(0, Σ_d) i.i.d.     (rotor-speed plant, RK4)
 
 Scenario: start 1.5 m in front of the wall at rest. The target is 0.1 m
 behind the wall, so the cost pushes the drone against the chance constraint
@@ -19,14 +19,15 @@ the frequency of G_j x(t) > g_j over the realizations.
 Checked:
     violation frequency ≤ β_j      every row, every sample (binomial 3σ band);
                                    reported: worst sample and stationary mean
-    0 ≤ f_i ≤ F_MAX                hard — the first input is deterministic
+    F_MIN ≤ f_cmd,i ≤ F_MAX        hard — the first input is deterministic
     slack = 0                      how often the soft state rows were needed
 Expected (Kouvaritakis & Cannon 2016, ch. 7): with z₀ = x(t) the closed-loop
 frequency stays BELOW β — the constraint of step k = 1 alone would give
 exactly β, the later steps (larger σ_k) push the plan further back.
 
 Imports:
-    quadrotor_model.py      → create_disturbance_plant(), quat_normalize()
+    quadrotor_model.py      → create_rotor_plant(), rotor_plant_hover_state(),
+                               rotor_to_thrust_state(), quat_normalize()
     compute_tube_params.py  → reduce_state()  (deviation coordinates)
     compute_smpc_params.py  → load_smpc_params(), backoff_factor(), row_std()
     ocp_config_smpc.py      → create_solver(), solve(), shifted_plan(), warm_start()
@@ -43,10 +44,10 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_model import (create_disturbance_plant, quat_normalize,
-                                  f_hover, F_MAX, NX, NU, ND)
-from stage8_tube.compute_tube_params import (NE_RIGID as NE,                  # 13-state until
-                                             reduce_state_rigid as reduce_state)  # Stage 9 migrates
+from core.quadrotor_model import (create_rotor_plant, rotor_plant_hover_state,
+                                  rotor_to_thrust_state, quat_normalize,
+                                  f_hover, F_MIN, F_MAX, NX, NXM, NU, ND)
+from stage8_tube.compute_tube_params import NE, reduce_state
 from stage9_smpc.compute_smpc_params import load_smpc_params, backoff_factor, row_std
 import stage9_smpc.ocp_config_smpc as smpc
 from core.plot_utils import (plot_smpc_chance, plot_smpc_prediction,
@@ -78,9 +79,9 @@ def run_once(solver, plant, par: dict, seed: int, keep_pred: bool = False) -> di
     D     = rng.standard_normal((n_sim, ND)) * par['d_sigma']
     k_pred = {int(round(t / Ts)) for t in T_PRED} if keep_pred else set()
 
-    x0 = np.zeros(NX); x0[0:3] = P0; x0[6] = 1.0
-    X   = np.zeros((n_sim + 1, NX)); X[0] = x0
-    X_e = np.zeros((n_sim + 1, NE)); X_e[0] = reduce_state(x0, P_REF)
+    x_plant = rotor_plant_hover_state(); x_plant[0:3] = P0       # at rest, rotors at hover
+    X   = np.zeros((n_sim + 1, NXM)); X[0] = rotor_to_thrust_state(x_plant)
+    X_e = np.zeros((n_sim + 1, NE)); X_e[0] = reduce_state(X[0], P_REF)
     U   = np.zeros((n_sim, NU))
     status  = np.zeros(n_sim, dtype=int)
     slack   = np.zeros(n_sim)
@@ -101,16 +102,17 @@ def run_once(solver, plant, par: dict, seed: int, keep_pred: bool = False) -> di
             Z_pl, V_pl = Z_new, V_new
             u_d = V_pl[0]
         elif Z_pl is not None:                   # shifted plan + error feedback, inside the box
-            u_d = np.clip(V_pl[0] + K @ (x_e - Z_pl[0]), -f_hover, F_MAX - f_hover)
+            u_d = np.clip(V_pl[0] + K @ (x_e - Z_pl[0]), F_MIN - f_hover, F_MAX - f_hover)
         else:
             raise RuntimeError(f'OCP failed at t = 0 (status {status[k]})')
         if k in k_pred:
             preds.append((k * Ts, Z_pl.copy()))
 
         U[k] = f_hover + u_d
-        plant.set('x', X[k]); plant.set('u', U[k]); plant.set('p', D[k])
+        plant.set('x', x_plant); plant.set('u', U[k]); plant.set('p', D[k])
         plant.solve()
-        X[k + 1]   = quat_normalize(plant.get('x'))
+        x_plant    = quat_normalize(plant.get('x'))
+        X[k + 1]   = rotor_to_thrust_state(x_plant)
         X_e[k + 1] = reduce_state(X[k + 1], P_REF)
 
     return dict(X=X, X_e=X_e, U=U, D=D, status=status, slack=slack,
@@ -120,12 +122,12 @@ def run_once(solver, plant, par: dict, seed: int, keep_pred: bool = False) -> di
 def simulate() -> dict:
     """Run 0 in full (figures) + N_MC realizations for the violation statistics."""
     par    = load_smpc_params()
-    plant  = create_disturbance_plant(par['Ts'])
+    plant  = create_rotor_plant(par['Ts'])         # one call per Ts (4 RK4 steps) = the model of G_d
     solver = smpc.create_solver(par)
 
     runs = [run_once(solver, plant, par, SEED + i, keep_pred=(i == 0)) for i in range(N_MC)]
     return dict(par=par, Ts=par['Ts'], run0=runs[0],
-                X_e=np.array([r['X_e'] for r in runs]),          # (N_MC, n+1, 12)
+                X_e=np.array([r['X_e'] for r in runs]),          # (N_MC, n+1, 16)
                 U=np.array([r['U'] for r in runs]),              # (N_MC, n, 4)
                 status=np.array([r['status'] for r in runs]),
                 slack=np.array([r['slack'] for r in runs]),
@@ -163,8 +165,13 @@ def summarize(res: dict) -> None:
         ok = '✓' if freq[1:, j].max() <= band[j] else '✗'
         print(f'    {"":22s}: {name:9s} {beta[j]:5.2f} {freq[1:, j].max():13.4f}'
               f' {freq[tail, j].mean():13.4f}   {ok}')
-    print(f'    motors                : [{U.min():.3f}, {U.max():.3f}] N'
-          f'   box [0, {F_MAX:.3f}]   {"✓" if U.min() >= 0 and U.max() <= F_MAX else "✗"}')
+    print(f'    thrust commands       : [{U.min():.3f}, {U.max():.3f}] N'
+          f'   box [{F_MIN:.3f}, {F_MAX:.3f}]'
+          f'   {"✓" if U.min() >= F_MIN - 1e-9 and U.max() <= F_MAX + 1e-9 else "✗"}')
+    sat   = np.any((U <= F_MIN + 1e-6) | (U >= F_MAX - 1e-6), axis=2)       # (N_MC, n)
+    t_sat = Ts * np.nonzero(sat)[1]
+    print(f'    commands on the box   : {100 * sat.mean():.3f} % of samples, in {sat.any(axis=1).sum()}'
+          f'/{N_MC} runs' + (f',  at t ∈ [{t_sat.min():.2f}, {t_sat.max():.2f}] s' if sat.any() else ''))
     print(f'    wall distance t ≥ {T_SETTLE:.0f} s : mean {par["g"][0] - p_tail.mean():.4f} m,'
           f' std {p_tail.std():.4f} m'
           f'   (prediction: κσ_∞ = {backoff_factor(beta[0], par["method"]) * par["sig_x_inf"][0]:.4f},'
@@ -183,7 +190,7 @@ if __name__ == '__main__':
     par, Ts, r0 = res['par'], res['Ts'], res['run0']
     freq, Y = violation_frequency(res)
     kappa   = backoff_factor(par['beta_x'], par['method'])
-    x_ref   = np.zeros(NX); x_ref[0:3] = P_REF; x_ref[6] = 1.0
+    x_ref   = np.zeros(NXM); x_ref[0:3] = P_REF; x_ref[6] = 1.0; x_ref[NX:] = f_hover
 
     rows = [(0, 'p_x − p_ref,x [m]  (wall, zoom)', (par['g'][0] - 0.30, par['g'][0] + 0.05)),
             (3, 'q_y [-]  (tilt, upper)', None), (4, '−q_y [-]  (tilt, lower)', None)]
@@ -205,7 +212,7 @@ if __name__ == '__main__':
                 'Stage 9 — Stochastic MPC: states (nonlinear plant, one realization)',
                 os.path.join(RESULTS_DIR, 'states.png'))
     plot_inputs(r0['U'], Ts,
-                'Stage 9 — Stochastic MPC: motor thrusts (one realization)',
+                'Stage 9 — Stochastic MPC: thrust commands (one realization)',
                 os.path.join(RESULTS_DIR, 'inputs.png'))
     plot_3d_trajectory(r0['X'], x_ref,
                        'Stage 9 — Stochastic MPC: 3D trajectory (one realization)',
