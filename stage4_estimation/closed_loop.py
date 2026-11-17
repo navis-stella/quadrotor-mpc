@@ -87,11 +87,11 @@ from core.plot_utils                         import (
     plot_velocity_estimation, plot_thrust_estimation, plot_solve_times,
 )
 
-OMEGA_MPC   = 0.9 * OMEGA_MAX       # MPC soft rate limit of the 13-state stages 6–7 (imported there)
-# Motor model: the thrust lag delays the braking torque, so the true rate
-# overshoots a soft box further — 0.9·OMEGA_MAX let it reach 2.03 rad/s,
-# outside the certified envelope. 0.85 keeps it inside.
-OMEGA_MPC_MOTOR = 0.85 * OMEGA_MAX  # [rad/s] MPC soft rate limit of the Stage 4 loop
+# MPC soft rate limit — margin to the certified envelope (also used by
+# Stages 6–7). The thrust lag delays the braking torque, so the true rate
+# overshoots a soft box: 0.9·OMEGA_MAX (enough on the 13-state model) let
+# it reach 2.03 rad/s, outside the envelope; 0.85 keeps it inside.
+OMEGA_MPC_MOTOR = 0.85 * OMEGA_MAX  # [rad/s]
 ESTIMATORS  = ('ekf', 'mhe')
 STAGE_LABEL = {'ekf': 'Stage 4a — EKF', 'mhe': 'Stage 4b — MHE'}
 STAGE_DIR   = {'ekf': 'stage4a_ekf',    'mhe': 'stage4b_mhe'}     # results/<dir>, docs/<dir>.md

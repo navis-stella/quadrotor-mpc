@@ -10,8 +10,8 @@ barrier function (DCBF) of Zeng, Zhang & Sreenath (ACC 2021):
     7b   hⱼ(x_{i+1}) ≥ (1 − γ)·hⱼ(x_i)       i = 0..N−1
 
     hⱼ = squared horizontal distance to pillar j minus r_safe² (as in 7a);
-    x_{i+1} is written as one RK4 step F(x_i, u_i) inside the constraint
-    (ocp_config_obstacle.dcbf_pillars).
+    x_{i+1} is written as the OCP's RK4 step F(x_i, u_i) (2 substeps on the
+    thrust-lag model) inside the constraint (ocp_config_obstacle.dcbf_pillars).
 
 What γ does:
     The barrier value may shrink by at most the fraction γ per sample.
@@ -40,7 +40,7 @@ import numpy as np
 import stage7_obstacle.ocp_config_obstacle as obs
 import stage7_obstacle.closed_loop         as cl
 from stage7_obstacle.closed_loop           import PILLARS, TS, MARGIN
-from stage4_estimation.closed_loop         import OMEGA_MPC
+from stage4_estimation.closed_loop         import OMEGA_MPC_MOTOR
 from core.plot_utils                       import plot_dcbf_sweep
 
 RESULTS_DIR = os.path.join('results', 'stage7b_obst_dcbf')
@@ -68,14 +68,14 @@ def sweep_row(res: dict) -> dict:
     X, X_r = res['X'], res['X_r']
     gap  = obs.clearance(X[:, :3], PILLARS).min(axis=1)
     e_p  = np.linalg.norm(X[:-1, :3] - X_r[:, :3], axis=1)
-    w    = np.abs(X[:, 10:]).max(axis=1)
+    w    = np.abs(X[:, 10:13]).max(axis=1)
     tilt = np.degrees(np.arccos(np.clip(1 - 2 * (X[:, 7] ** 2 + X[:, 8] ** 2), -1, 1)))
     return dict(gamma=res['gamma'],
                 fail=int(np.sum(~np.isin(res['status'], [0, 2]))),
                 gap=1e3 * gap.min(), slack=res['slack'].max(),
                 lead=swerve_lead(res),
                 e_rms=1e3 * np.sqrt(np.mean(e_p ** 2)), e_max=1e3 * e_p.max(),
-                w_max=w.max(), w_sat=np.mean(w > 0.97 * OMEGA_MPC),
+                w_max=w.max(), w_sat=np.mean(w > 0.97 * OMEGA_MPC_MOTOR),
                 tilt=tilt.max(), t_mpc=1e3 * res['T_mpc'].mean())
 
 
@@ -110,8 +110,8 @@ if __name__ == '__main__':
             curves.append((f'γ = {r["gamma"]:g}' + (' (≙ 7a)' if r['gamma'] == 1 else ''), t,
                            obs.clearance(r['X'][:-1, :3], PILLARS).min(axis=1),
                            np.linalg.norm(r['X'][:-1, :3] - r['X_r'][:, :3], axis=1),
-                           np.abs(r['X'][:-1, 10:]).max(axis=1)))
-        plot_dcbf_sweep(curves, (4.0, 11.0), MARGIN, OMEGA_MPC,
+                           np.abs(r['X'][:-1, 10:13]).max(axis=1)))
+        plot_dcbf_sweep(curves, (4.0, 11.0), MARGIN, OMEGA_MPC_MOTOR,
                         'Stage 7b — DCBF: effect of γ (first turn, P1 → P2 → P3)',
                         os.path.join(RESULTS_DIR, 'gamma_sweep.png'))
     else:

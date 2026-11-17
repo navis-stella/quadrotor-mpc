@@ -12,19 +12,16 @@ has to correct deviations, not fight an inconsistent target:
     s.t.   x_{i+1} = f(x_i, u_i, d̂),   x_0 = x̂(t)
            F_MIN ≤ u_i ≤ F_MAX,   |ω_i| ≤ ω_max (soft, optional)
 
-Motor-dynamics model (default, model='motor'): x = [body (13); f (4)],
-u = f_cmd, ḟ = (f_cmd − f)/τ_m. The reference comes from
+Motor-dynamics model: x = [body (13); f (4)], u = f_cmd,
+ḟ = (f_cmd − f)/τ_m. The reference comes from
 reference_flatness.motor_horizon: x_r = [x_r,body; f_r], u_r = f_r + τ_m·ḟ_r,
-an exact trajectory of the thrust-lag model.
-
-Transitional (until Stage 7 migrates): model='rigid' builds the 13-state
-version with the thrusts as input — Stage 7 adds its obstacle constraints
-to that one.
+an exact trajectory of the thrust-lag model. Stage 7 adds its obstacle
+constraints to exactly this OCP (create_ocp).
 
     reference at node i = trajectory at t + i·Ts   (shifts with the clock)
 
-State error e(x, x_r) (16 on the motor model, 12 on the rigid one):
-    [ p − p_r,  v − v_r,  vec(q ⊗ q_r⁻¹),  ω − ω_r  (, f − f_r) ]
+State error e(x, x_r) (16):
+    [ p − p_r,  v − v_r,  vec(q ⊗ q_r⁻¹),  ω − ω_r,  f − f_r ]
 
     The attitude error is the vector part of the error quaternion
     q ⊗ q_r⁻¹ (quat_error_casadi, the same one the MHE cost uses), i.e.
@@ -41,8 +38,8 @@ Disturbance (Stage 3–4 offset-free mechanism, unchanged):
 Terminal cost:
     W_e = P_lqr, the reduced-order DARE at hover, restricted to the error
     coordinates — at hover vec(q ⊗ q_r⁻¹) = q_vec, exactly the reduced DARE
-    coordinates. Motor model: the Ts-scaled 16-state DARE of Stage 2b
-    (compute_thrust_lag_dare_terminal_cost); rigid: the old unscaled one. It is
+    coordinates: the Ts-scaled 16-state DARE of Stage 2b
+    (compute_thrust_lag_dare_terminal_cost). It is
     the LQR cost-to-go of the error dynamics linearized at hover, a good
     approximation as long as the reference stays near hover (helix: tilt
     ≤ 18°, |ω_r| ≤ 0.55 rad/s). A certified terminal cost for a generic
@@ -55,8 +52,8 @@ acados mapping (same pattern as Stage 5: the residual IS the error, yref = 0):
     cost      NONLINEAR_LS, y = [state_error(x, x_r); u − u_r],  yref = 0
               (the error quaternion needs q_r inside the expression, so the
                whole reference is passed as a parameter, not via yref)
-    p_i       [d̂ (6); x_r,i (17); u_r,i (4)]   (27 per node on the motor model,
-              23 on the rigid one; u_r,N unused — no terminal input)
+    p_i       [d̂ (6); x_r,i (17); u_r,i (4)]   (27 per node;
+              u_r,N unused — no terminal input)
     RTI       one SQP iteration per sample; the previous solution is
               SHIFTED one node (shift_warm_start) because the reference
               moves with time — an unshifted guess lags by one sample.
@@ -67,9 +64,9 @@ import casadi as ca
 from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver
 
-from core.quadrotor_model import (create_disturbance_model, create_thrust_lag_disturbance_model,
+from core.quadrotor_model import (create_thrust_lag_disturbance_model,
                                   quat_error_casadi, f_hover, F_MIN, F_MAX, NX, NXM, NU, ND)
-from core.terminal_cost import compute_dare_terminal_cost, compute_thrust_lag_dare_terminal_cost
+from core.terminal_cost import compute_thrust_lag_dare_terminal_cost
 from stage1_basic.ocp_config_basic import Q, Q_F, R_CMD
 from stage3_offsetfree.ocp_config_offsetfree import add_soft_omega_box
 from core.codegen import build_path
@@ -77,19 +74,11 @@ from core.codegen import build_path
 # ─────────────────────────────────────────────────────────────────
 # Tracking Design
 # ─────────────────────────────────────────────────────────────────
-# Motor model: the Stage 1 weights on [x; f] and f_cmd (identical to Stages 1–5)
+# The Stage 1 weights on [x; f] and f_cmd (identical to Stages 1–5)
 Q_MOTOR = block_diag(Q, Q_F)                   # 17×17 (qw slot unused here)
-# Rigid (transitional, Stage 7): the 13-state weights of the old Stages 1–6
-Q_STAGE = np.diag([
-    80.,  80.,  120.,           # px, py, pz          position: high
-    10.,  10.,   15.,           # vx, vy, vz          velocity: moderate
-    10., 120.,  120.,  80.,     # qw, qx, qy, qz      attitude: scaled from Euler
-     1.,   1.,    1.            # p,  q,  r           angular rate: low
-])
-R_STAGE = np.diag([0.1, 0.1, 0.1, 0.1])
 
-IDX_E_RIGID = np.array([0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12])   # x slots of the error e
-IDX_E       = np.concatenate([IDX_E_RIGID, np.arange(NX, NXM)])  # + thrust states (motor)
+IDX_E = np.array([0, 1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16])   # x slots of e
+NE    = len(IDX_E)             # 16 — error coordinates (qw dropped)
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -102,12 +91,10 @@ def state_error(x, x_r):
     vec(q ⊗ q_r⁻¹) = sin(θ/2)·n ≈ ½·(small rotation vector, world frame);
     zero iff q and q_r are the same rotation (either sign).
     """
-    e = ca.vertcat(x[0:6] - x_r[0:6],
-                   quat_error_casadi(x[6:10], x_r[6:10])[1:4],
-                   x[10:13] - x_r[10:13])
-    if x.shape[0] > NX:                           # motor model: thrust states
-        e = ca.vertcat(e, x[NX:] - x_r[NX:])
-    return e
+    return ca.vertcat(x[0:6] - x_r[0:6],
+                      quat_error_casadi(x[6:10], x_r[6:10])[1:4],
+                      x[10:13] - x_r[10:13],
+                      x[NX:] - x_r[NX:])
 
 
 # ─────────────────────────────────────────────────────────────────
@@ -115,8 +102,7 @@ def state_error(x, x_r):
 # ─────────────────────────────────────────────────────────────────
 def create_ocp(N:         int   = 20,
                T_horizon: float = 1.0,
-               omega_max: float = None,
-               model:     str   = 'motor') -> AcadosOcp:
+               omega_max: float = None) -> AcadosOcp:
     """
     The trajectory-tracking OCP, not yet compiled.
 
@@ -129,27 +115,15 @@ def create_ocp(N:         int   = 20,
                       must equal the sample time of the reference grid
         omega_max     optional soft |ωᵢ| bound [rad/s] (add_soft_omega_box);
                       None = no rate limit
-        model         'motor' (default) or 'rigid' (13-state, transitional for Stage 7)
     """
-    motor = (model == 'motor')
-    Ts    = T_horizon / N
-    if motor:
-        acados_model = create_thrust_lag_disturbance_model()
-        acados_model.name = 'quadrotor_trajectory'
-        nx, idx_e, n_rk4  = NXM, IDX_E, 2               # τ_m < Ts
-        W_x   = Q_MOTOR[np.ix_(idx_e, idx_e)]
-        R_u   = R_CMD
-        P_lqr = compute_thrust_lag_dare_terminal_cost(Q_MOTOR, R_CMD, Ts)
-        u_min = F_MIN
-    else:
-        acados_model = create_disturbance_model()
-        acados_model.name = 'quadrotor_trajectory_rigid'
-        nx, idx_e, n_rk4  = NX, IDX_E_RIGID, 1
-        W_x   = Q_STAGE[np.ix_(idx_e, idx_e)]
-        R_u   = R_STAGE
-        P_lqr = compute_dare_terminal_cost(Q_STAGE, R_STAGE, Ts)
-        u_min = 0.0
-    ne = len(idx_e)
+    Ts = T_horizon / N
+    acados_model = create_thrust_lag_disturbance_model()
+    acados_model.name = 'quadrotor_trajectory'
+    nx, idx_e, ne, n_rk4 = NXM, IDX_E, NE, 2              # τ_m < Ts
+    W_x   = Q_MOTOR[np.ix_(idx_e, idx_e)]
+    R_u   = R_CMD
+    P_lqr = compute_thrust_lag_dare_terminal_cost(Q_MOTOR, R_CMD, Ts)
+    u_min = F_MIN
 
     d   = acados_model.p                              # d̂ (6), as in Stage 3–4
     x_r = ca.SX.sym('x_r', nx)                        # reference state at the node
@@ -216,7 +190,7 @@ def create_solver(N:         int   = 20,
 # Runtime Helpers
 # ─────────────────────────────────────────────────────────────────
 def pack_param(d_hat: np.ndarray, x_r: np.ndarray, u_r: np.ndarray) -> np.ndarray:
-    """Parameter of one node: [d̂ (6); x_r (17 motor | 13 rigid); u_r (4)]."""
+    """Parameter of one node: [d̂ (6); x_r (17); u_r (4)]  (27)."""
     return np.concatenate([d_hat, x_r, u_r])
 
 
@@ -229,7 +203,7 @@ def set_trajectory(solver: AcadosOcpSolver,
     Reference over the horizon, node i ↔ time t + i·Ts.
 
         X_r  (N+1, 17)  flatness states [x_r; f_r] (reference_flatness.motor_horizon,
-                        under d̂); (N+1, 13) on the rigid model
+                        under d̂)
         U_r  (N+1, 4)   reference commands (U_r[N] unused — no terminal input)
         d̂    (6,)       disturbance estimate, same at every node
     """

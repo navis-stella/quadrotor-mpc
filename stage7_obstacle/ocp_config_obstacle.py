@@ -17,7 +17,8 @@ Stage 7a:
 
     min_u  Σ_{i<N} ‖ [e(x_i, x_r,i); u_i − u_r,i] ‖²_W  +  ‖ e(x_N, x_r,N) ‖²_P
            + Σ_{i=1..N} Σ_j  z₁·sⱼ,ᵢ + z₂·sⱼ,ᵢ²
-    s.t.   x_{i+1} = f(x_i, u_i, d̂),   x_0 = x̂(t),   0 ≤ u_i ≤ F_MAX
+    s.t.   x_{i+1} = f(x_i, u_i, d̂),   x_0 = x̂(t),   F_MIN ≤ u_i ≤ F_MAX
+           (motor-dynamics model: x = [body; f], u = f_cmd, as Stage 6)
            hⱼ(p_i) ≥ −sⱼ,ᵢ,  sⱼ,ᵢ ≥ 0      i = 1..N  (terminal node included)
 
 Pillar constraint (squared distance in the horizontal plane):
@@ -93,14 +94,19 @@ Stage 7b — discrete-time control barrier function (DCBF):
 
     How to write it in acados: a constraint sees ONE node (x_i, u_i), the
     DCBF couples two. x_{i+1} is therefore written as F(x_i, u_i, p_i),
-    one RK4 step of length Ts — the same discretization the OCP uses (ERK,
-    4 stages, 1 step), so h(F(x_i, u_i)) IS h(x_{i+1}) on a converged
-    (defect-free) trajectory:
+    RK4 over Ts in 2 substeps — the same discretization the OCP uses (ERK,
+    4 stages, 2 steps on the thrust-lag model), so h(F(x_i, u_i)) IS
+    h(x_{i+1}) on a converged (defect-free) trajectory. (With one RK4 step
+    the lag would be integrated with factor 0.27 instead of e^{−Ts/τ_m} =
+    0.19, and the DCBF would see a different x_{i+1} than the OCP.)
 
         cⱼ(x_i, u_i) = hⱼ(F(x_i, u_i)) − (1 − γ)·hⱼ(x_i) ≥ 0,   i = 0..N−1
 
     Node 0 now carries the constraint: x_0 is fixed, but u_0 is free, and
-    the row on u_0 is the actual safety filter. No terminal row is needed —
+    the row on u_0 is the actual safety filter. On the motor model u_0
+    reaches p_1 only through the thrust lag (f_cmd → f → v̇ → p), so its
+    direct authority over the node-0 row is small; the rows on the later
+    nodes constrain the future commands. No terminal row is needed —
     hⱼ(x_N) ≥ (1 − γ)·hⱼ(x_{N−1}) is the i = N−1 row.
 
     What is lost: cⱼ is a DIFFERENCE of convex functions of p, composed
@@ -135,7 +141,7 @@ import casadi as ca
 from acados_template import AcadosOcp, AcadosOcpSolver, ACADOS_INFTY
 
 import stage6_trajectory.ocp_config_trajectory as traj
-from core.integrators import rk4_step       # F(x, u, p): the OCP's ERK4 step
+from core.integrators import rk4_step       # F(x, u, p): the OCP's ERK4 step (2 substeps)
 from core.codegen import build_path
 
 # ─────────────────────────────────────────────────────────────────
@@ -146,6 +152,7 @@ MARGIN  = 0.05      # [m]  δ: inter-sample chord (≈ 2.5 mm at 2 m/s) + model 
 Z_L1      = 1e4     # linear slack weight, 7a  (exact penalty, see module docstring)
 Z_L1_DCBF = 1e5     # linear slack weight, 7b  (larger multipliers, see there)
 Z_L2    = 1e2       # quadratic slack weight
+N_RK4   = 2         # RK4 substeps of F in the DCBF rows = sim_method_num_steps of the OCP
 
 
 @dataclass(frozen=True)
@@ -178,7 +185,7 @@ def dcbf_pillars(model, Ts: float, gamma: float, pillars,
     cⱼ(x, u) = hⱼ(F(x, u)) − (1 − γ)·hⱼ(x)  for every pillar (CasADi column);
     cⱼ ≥ 0 is the DCBF condition hⱼ(x_{i+1}) ≥ (1 − γ)·hⱼ(x_i).
     """
-    x_next = rk4_step(model, Ts)
+    x_next = rk4_step(model, Ts, n_steps=N_RK4)
     return (h_pillars(x_next[0:3], pillars, r_drone, margin)
             - (1.0 - gamma) * h_pillars(model.x[0:3], pillars, r_drone, margin))
 
@@ -298,12 +305,11 @@ def create_solver(pillars,
     z_l1=None → Z_L1 (7a) or Z_L1_DCBF (7b).
 
     The pillars are static, so they are compiled into the solver as
-    constants (no extra parameters: p stays [d̂; x_r; u_r], NP = 23). The
+    constants (no extra parameters: p stays [d̂; x_r; u_r], 27 entries). The
     runtime helpers of ocp_config_trajectory (set_trajectory,
     set_initial_state, init_guess, shift_warm_start) apply unchanged.
     """
-    ocp = traj.create_ocp(N, T_horizon, omega_max,
-                          model='rigid')   # 13-state until Stage 7 migrates
+    ocp = traj.create_ocp(N, T_horizon, omega_max)
     # one name per γ: each solver is its own shared library, so several γ
     # can be built and run in one process (the sweep of simulate_obst_dcbf)
     name = 'obst_dist' if gamma is None else f'obst_dcbf_g{gamma:g}'.replace('.', 'p')
