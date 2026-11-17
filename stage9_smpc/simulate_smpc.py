@@ -45,7 +45,8 @@ import numpy as np
 
 from core.quadrotor_model import (create_disturbance_plant, quat_normalize,
                                   f_hover, F_MAX, NX, NU, ND)
-from stage8_tube.compute_tube_params import NE, reduce_state
+from stage8_tube.compute_tube_params import (NE_RIGID as NE,                  # 13-state until
+                                             reduce_state_rigid as reduce_state)  # Stage 9 migrates
 from stage9_smpc.compute_smpc_params import load_smpc_params, backoff_factor, row_std
 import stage9_smpc.ocp_config_smpc as smpc
 from core.plot_utils import (plot_smpc_chance, plot_smpc_prediction,

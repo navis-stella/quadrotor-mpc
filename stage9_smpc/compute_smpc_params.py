@@ -60,7 +60,9 @@ from scipy.linalg import solve_discrete_are
 from scipy.stats import norm
 
 from core.quadrotor_model import f_hover, F_MAX, NU, ND
-from stage8_tube.compute_tube_params import NE, NAMES, TS, linear_model, residual_function
+from stage8_tube.compute_tube_params import (NE_RIGID as NE, NAMES_RIGID as NAMES, TS,   # 13-state
+                                             linear_model_rigid as linear_model,       # until Stage 9
+                                             residual_function_rigid as residual_function)  # migrates
 
 
 # ─────────────────────────────────────────────────────────────────
