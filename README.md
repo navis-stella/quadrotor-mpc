@@ -19,7 +19,7 @@ results with plots. This README gives the overview.
 | Input (4) | thrust **commands** to the four ESCs, $`f_{\min} \le f_{\text{cmd},i} \le f_{\max} = 3 f_{\text{hover}} \approx 7.36`$ N, idle thrust $f_{\min} \approx 0.074$ N |
 | Plant (17) | rigid body + rotor speeds $\Omega$: inverse thrust map $`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, ESC speed loop $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$ with $\tau_m = 30$ ms, thrust $`f = k_f \Omega^2`$ |
 | MPC prediction model (17) | rigid body + rotor thrusts $f$ with the lag $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ (equal to the plant to first order); rotor speeds measured, passed as $`f = k_f \Omega^2`$ |
-| Migration to the motor dynamics | done: Stages 1–7. Stages 8–9 still use the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
+| Migration to the motor dynamics | done: Stages 1–8. Stage 9 still uses the 13-state model with the thrusts as direct input; the 13-state version of all stages is tag `rigid-body` |
 | Layout | `+` configuration, hover thrust $f_{\text{hover}} = mg/4 \approx 2.45$ N |
 | Disturbance (Stages 3–4) | constant force (world frame) and torque (body frame), $d \in \mathbb{R}^6$ |
 | Reference trajectory (Stage 6) | analytic helix, mapped by differential flatness to a full state and input reference $(x_r(t), u_r(t))$ |
@@ -43,7 +43,7 @@ Equations of motion, motor dynamics, disturbance model and quaternion convention
 | `stage6` | 6 | **Trajectory-tracking NMPC** — helix reference, flatness feedforward $(x_r, u_r)$, time-indexed reference over the horizon, quaternion-error cost; noisy $`y = [p;\, q;\, \omega]`$ with the Stage 4b MHE | [stage6_trajectory.md](docs/stage6_trajectory.md) |
 | `stage7` | 7a | **Obstacle avoidance with state constraints** — vertical pillars on the Stage 6 helix as soft squared-distance constraints $h_j(p) \ge 0$ (exact penalty), warm start projected onto the free space (nominal plant, full state feedback) | [stage7a_obst_dist.md](docs/stage7a_obst_dist.md) |
 | `stage7` | 7b | **Discrete-time control barrier function** — same scene, constraint $`h_j(x_{i+1}) \ge (1-\gamma)\, h_j(x_i)`$ with the next state as an RK4 step inside the constraint; $\gamma$ sweep | [stage7b_obst_dcbf.md](docs/stage7b_obst_dcbf.md) |
-| `stage8` | 8 | **Tube-based robust MPC** — nominal MPC on the hover linearization + ancillary LQR feedback; the disturbance set $\mathbb W$ bounds $d$ *and* the linearization error of the nonlinear plant (sampled), constraints tightened by the support function of the mRPI set (nonlinear plant, full state feedback) | [stage8_tube.md](docs/stage8_tube.md) |
+| `stage8` | 8 | **Tube-based robust MPC** — nominal MPC on the hover linearization + ancillary LQR feedback; the disturbance set $\mathbb W$ bounds $d$ *and* the linearization error of the nonlinear rotor-speed plant (sampled), a command-lead constraint keeps the rotor-loop residual small, constraints tightened by the support function of the mRPI set (full state feedback) | [stage8_tube.md](docs/stage8_tube.md) |
 | `stage9` | 9 | **Stochastic MPC with chance constraints** — Gaussian disturbance, deterministic equivalent on the hover linearization: error covariance propagated offline, state and input constraints tightened by $\Phi^{-1}(1-\beta)\,\sigma_k$ per prediction step (Cantelli factor as distribution-free option), $z_0 = x(t)$, soft state rows; Monte Carlo check on the nonlinear plant | [stage9_smpc.md](docs/stage9_smpc.md) |
 
 ## Key results

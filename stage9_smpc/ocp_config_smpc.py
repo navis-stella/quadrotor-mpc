@@ -46,7 +46,7 @@ from scipy.linalg import block_diag
 from acados_template import AcadosOcp, AcadosOcpSolver, AcadosModel, ACADOS_INFTY
 
 from core.quadrotor_model import NU
-from stage8_tube.compute_tube_params import NE
+from stage8_tube.compute_tube_params import NE_RIGID as NE   # 13-state until Stage 9 migrates
 from stage9_smpc.compute_smpc_params import load_smpc_params
 from core.codegen import build_path
 

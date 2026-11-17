@@ -6,7 +6,10 @@ with the tube controller of ocp_config_tube:
 
     nominal   z⁺ = A z + B v*(z),   z₀ = x₀           (linear model, no w)
     applied   u  = f_hover + v*(z) + K (x − z)         (ancillary feedback)
-    plant     x⁺ = F(x, u, d),  d ∈ D                  (nonlinear, RK4)
+    plant     x⁺ = F(x, u, d),  d ∈ D                  (nonlinear rotor-speed plant, RK4)
+
+On the motor model x = [p, v, qv, ω, f − f_hover] (16, the rotor speeds
+measured as f = k_f Ω²) and u is the thrust command.
 
 Scenario: start 1.4 m from the target at rest; d piecewise constant, a
 random VERTEX of D every 0.5 s (seeded) — the persistent worst-case sign
@@ -15,13 +18,15 @@ pattern, not a gentle average.
 Checked (the guarantee of compute_tube_params):
     e = x − z ∈ S            exact: gauge γ(e) ≤ 1 by LP, every GAUGE_STRIDE-th
                              sample; and at every sample along the directions
-                             the tightening uses (12 axes, 4 wrench rows of K)
-    x ∈ X,  ν ∈ U            state box, wrench box (hence motors in (0, F_MAX))
+                             the tightening uses (16 axes, 4 wrench rows of K)
+    x ∈ X,  ν ∈ U            state box incl. thrust-state wrench box, command wrench
+                             box (hence commands in (F_MIN, F_MAX))
+    |M(u − δf)| ≤ Δν          command lead (keeps the rotor-loop residual small)
     w ∈ W                    realized one-step model error inside the sampled box
 Expected (Mayne et al. 2005): z → 0 (nominal MPC), so x → S around the target.
 
 Imports:
-    quadrotor_model.py      → create_disturbance_plant(), quat_normalize(), MIXER
+    quadrotor_model.py      → create_rotor_plant(), rotor_to_thrust_state(), MIXER
     compute_tube_params.py  → load_tube_params(), reduce_state(), tube_gauge()
     ocp_config_tube.py      → create_solver(), solve_nominal(), shifted_candidate()
     plot_utils.py           → plot_tube_states/inputs/certificate, plot_states,
@@ -37,8 +42,9 @@ os.environ.setdefault('OMP_NUM_THREADS', '1')    # before the solver libraries l
 import time
 import numpy as np
 
-from core.quadrotor_model import (create_disturbance_plant, quat_normalize, MIXER,
-                                  f_hover, NX, NU, ND)
+from core.quadrotor_model import (create_rotor_plant, rotor_plant_hover_state,
+                                  rotor_to_thrust_state, quat_normalize, MIXER,
+                                  f_hover, NX, NXM, NU, ND)
 from stage8_tube.compute_tube_params import NE, NAMES, load_tube_params, reduce_state, tube_gauge
 import stage8_tube.ocp_config_tube as tube
 from core.plot_utils import (plot_tube_states, plot_tube_inputs, plot_tube_certificate,
@@ -49,7 +55,7 @@ RESULTS_DIR = os.path.join('results', 'stage8_tube')
 # ─────────────────────────────────────────────────────────────────
 # Scenario
 # ─────────────────────────────────────────────────────────────────
-N       = 60                                # 3 s horizon — slow nominal (tilt ≤ 2.8°)
+N       = 80                                # 4 s horizon — slow nominal (tilt ≤ 1.6°; 60 is infeasible)
 T_SIM   = 15.0
 P_REF   = np.array([2.0, 1.0, 3.0])         # target hover point
 P0      = P_REF + np.array([-1.0, 0.8, -0.5])
@@ -75,13 +81,14 @@ def simulate() -> dict:
     A, B, K, K_f = par['A'], par['B'], par['K'], par['K_f']
     n_sim = int(round(T_SIM / Ts))
 
-    plant  = create_disturbance_plant(Ts)
+    plant  = create_rotor_plant(Ts)                # one call per Ts (4 RK4 steps) = the W residual
     solver = tube.create_solver(par, N)
 
-    x0 = np.zeros(NX); x0[0:3] = P0; x0[6] = 1.0
+    x_plant = rotor_plant_hover_state(); x_plant[0:3] = P0     # at rest, rotors at hover
+    x0 = rotor_to_thrust_state(x_plant)
     D  = disturbance_sequence(n_sim, Ts, par['d_bound'])
 
-    X    = np.zeros((n_sim + 1, NX)); X[0] = x0
+    X    = np.zeros((n_sim + 1, NXM)); X[0] = x0
     X_e  = np.zeros((n_sim + 1, NE))
     Z    = np.zeros((n_sim + 1, NE))
     U    = np.zeros((n_sim, NU))
@@ -94,7 +101,7 @@ def simulate() -> dict:
 
     x_e = reduce_state(x0, P_REF)
     z   = x_e.copy()                             # z₀ = x₀  →  e₀ = 0
-    assert np.all(np.abs(z[par['idx_x']]) <= par['x_bar']), \
+    assert np.all(np.abs(par['C_x'] @ z) <= par['xc_bar']), \
         'x₀ ∉ X̄ — the nominal trajectory must start inside the tightened set'
     X_e[0], Z[0] = x_e, z
     Z_pl = V_pl = None
@@ -119,9 +126,10 @@ def simulate() -> dict:
         u_d = tube.ancillary_input(v, x_e, z, K)
         u   = f_hover + u_d
 
-        plant.set('x', X[k]); plant.set('u', u); plant.set('p', D[k])
+        plant.set('x', x_plant); plant.set('u', u); plant.set('p', D[k])
         plant.solve()
-        X[k + 1] = quat_normalize(plant.get('x'))
+        x_plant  = quat_normalize(plant.get('x'))
+        X[k + 1] = rotor_to_thrust_state(x_plant)
 
         x_e_next = reduce_state(X[k + 1], P_REF)
         Wr[k]    = x_e_next - A @ x_e - B @ u_d  # realized one-step model error
@@ -142,9 +150,10 @@ def summarize(res: dict) -> None:
     E     = res['X_e'] - res['Z']
     e_sh  = np.abs(E) / par['h_x']
     ke_sh = np.abs(E @ (MIXER @ par['K']).T) / par['h_nu']
-    x_sh  = np.abs(res['X_e'][:, par['idx_x']]) / par['x_bound']
-    z_sh  = np.abs(res['Z'][:, par['idx_x']]) / par['x_bar']
+    x_sh  = np.abs(res['X_e'] @ par['C_x'].T) / par['xc_bound']
+    z_sh  = np.abs(res['Z'] @ par['C_x'].T) / par['xc_bar']
     u_sh  = np.abs(res['Nu']) / par['u_bound']
+    du_sh = np.abs(res['Nu'] - res['X_e'][:-1, 12:16] @ MIXER.T) / par['dnu_bound']   # M(u − δf)
     w_sh  = np.abs(res['W']) / par['w_bar']
     p_err = np.linalg.norm(res['X_e'][:, 0:3], axis=1)
     t_tail = res['Ts'] * np.arange(len(p_err)) >= T_SIM - 5.0
@@ -158,14 +167,15 @@ def summarize(res: dict) -> None:
     print(f'    gauge γ(e) of S (LP)  : {res["gauge"].max():.3f}  {ok(res["gauge"].max())}'
           f'   e = x − z ∈ S, exact, every {GAUGE_STRIDE}th sample')
     print(f'    max |e_j| / h_S(e_j)  : {e_sh.max():.3f}  {ok(e_sh.max())}'
-          f'   (worst: {NAMES[int(np.argmax(e_sh.max(axis=0)))]})   along the 12 axes')
+          f'   (worst: {NAMES[int(np.argmax(e_sh.max(axis=0)))]})   along the 16 axes')
     print(f'    max |(MKe)_i| / h_KS  : {ke_sh.max():.3f}  {ok(ke_sh.max())}   along the 4 wrench rows')
-    print(f'    max |x_j| / X_j       : {x_sh.max():.3f}  {ok(x_sh.max())}   x ∈ X')
+    print(f'    max |x_j| / X_j       : {x_sh.max():.3f}  {ok(x_sh.max())}   x ∈ X  (13 rows, incl. thrust wrench)')
     print(f'    max |z_j| / X̄_j       : {z_sh.max():.3f}  {ok(z_sh.max())}   z ∈ X̄')
     print(f'    max |ν_i| / U_i       : {u_sh.max():.3f}  {ok(u_sh.max())}   ν ∈ U')
+    print(f'    max |Δν_i| / Δν_i     : {du_sh.max():.3f}  {ok(du_sh.max())}   command lead M(u − δf)')
     print(f'    max |w_j| / w̄_j       : {w_sh.max():.3f}  {ok(w_sh.max())}'
           f'   (worst: {NAMES[int(np.argmax(w_sh.max(axis=0)))]})   w ∈ W')
-    print(f'    motors                : [{res["U"].min():.3f}, {res["U"].max():.3f}] N')
+    print(f'    thrust commands       : [{res["U"].min():.3f}, {res["U"].max():.3f}] N')
     print(f'    ‖p − p_ref‖ last 5 s  : max {p_err[t_tail].max():.3f} m   '
           f'(tube: ±{par["h_x"][0]:.3f}, ±{par["h_x"][1]:.3f}, ±{par["h_x"][2]:.3f} m)')
     print(f'    ‖z‖ at the end        : {np.linalg.norm(res["Z"][-1]):.2e}')
@@ -181,7 +191,7 @@ if __name__ == '__main__':
     summarize(res)
 
     par, Ts = res['par'], res['Ts']
-    x_ref = np.zeros(NX); x_ref[0:3] = P_REF; x_ref[6] = 1.0
+    x_ref = np.zeros(NXM); x_ref[0:3] = P_REF; x_ref[6] = 1.0; x_ref[NX:] = f_hover
     E = res['X_e'] - res['Z']
 
     plot_tube_states(res['X_e'], res['Z'], par['h_x'], Ts, par['idx_x'],
@@ -201,7 +211,7 @@ if __name__ == '__main__':
                 'Stage 8 — Tube MPC: states (nonlinear plant)',
                 os.path.join(RESULTS_DIR, 'states.png'))
     plot_inputs(res['U'], Ts,
-                'Stage 8 — Tube MPC: motor thrusts',
+                'Stage 8 — Tube MPC: thrust commands',
                 os.path.join(RESULTS_DIR, 'inputs.png'))
     plot_3d_trajectory(res['X'], x_ref,
                        'Stage 8 — Tube MPC: 3D trajectory',

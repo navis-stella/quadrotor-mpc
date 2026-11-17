@@ -942,9 +942,9 @@ def plot_tube_states(X_e:       np.ndarray,
     """
     Stage 8: true state x against the nominal z with the tube z ± h_S (4 × 3).
 
-    X_e     (n+1, 12)  plant state in deviation coordinates [p − p_ref, v, qv, ω]
-    Z       (n+1, 12)  nominal state
-    h_x     (12,)      support of the tube S along each axis (cross-section)
+    X_e     (n+1, ≥12) plant state in deviation coordinates [p − p_ref, v, qv, ω, (δf)] — first 12 plotted
+    Z       (n+1, ≥12) nominal state
+    h_x     (≥12,)     support of the tube S along each axis (cross-section)
     idx_x, x_bound, x_bar   constrained coordinates, X and X̄ = X ⊖ S
 
     The tube guarantee is that the blue curve never leaves the green band;
@@ -1027,8 +1027,9 @@ def plot_tube_certificate(E_share:   np.ndarray,
     """
     Stage 8: the three inequalities the guarantee rests on, per sample.
 
-    E_share (n+1, 12)  |e_j| / h_S(e_j)   — error against the tube along the axes
-    W_share (n, 12)    |w_j| / w̄_j        — realized w inside the sampled box W
+    E_share (n+1, n_e) |e_j| / h_S(e_j)   — error against the tube along the axes
+    W_share (n, n_e)   |w_j| / w̄_j        — realized w inside the sampled box W
+                       (n_e = 12, or 16 with the thrust states f of the motor model)
     D_share (n, 6)     d_j / d̄_j          — the disturbance the plant received
     gauge              optional (t (m,), γ (m,)) — exact membership e ∈ S ⇔ γ ≤ 1
                        (black dots, left panel)
@@ -1038,10 +1039,12 @@ def plot_tube_certificate(E_share:   np.ndarray,
     t_x = np.arange(E_share.shape[0]) * Ts
     t_u = np.arange(W_share.shape[0]) * Ts
     groups = [('p', slice(0, 3)), ('v', slice(3, 6)), ('q_v', slice(6, 9)), ('ω', slice(9, 12))]
+    if E_share.shape[1] > 12:
+        groups.append(('f', slice(12, 16)))
     fig, axes = plt.subplots(1, 3, figsize=(17, 4.5))
     fig.suptitle(title, fontsize=14)
 
-    colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple']   # red = the bound
+    colors = ['tab:blue', 'tab:orange', 'tab:green', 'tab:purple', 'tab:brown']   # red = the bound
     for (name, sl), col in zip(groups, colors):
         axes[0].plot(t_x, E_share[:, sl].max(axis=1), color=col, lw=1.2, label=name)
         axes[1].plot(t_u, W_share[:, sl].max(axis=1), color=col, lw=1.0, label=name)

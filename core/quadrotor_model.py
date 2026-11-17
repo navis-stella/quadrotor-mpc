@@ -765,6 +765,12 @@ def _build_rotor_plant_model() -> AcadosModel:
     return model
 
 
+def rotor_plant_model() -> AcadosModel:
+    """The rotor-speed plant ODE as an acados model (x = [x; Ω], u = f_cmd, p = d),
+    e.g. to build its RK4 step symbolically (Stage 8: disturbance set W)."""
+    return _build_rotor_plant_model()
+
+
 def create_rotor_plant(Ts: float) -> AcadosSimSolver:
     """
     AcadosSimSolver plant with motor dynamics: one call advances by Ts.
