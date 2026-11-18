@@ -1,12 +1,14 @@
-# 3D Quadrotor NMPC
+# Quadrotor MPC
 
-Nonlinear model predictive control for a 3D quadrotor in Python, using the
+Model predictive control for a 3D quadrotor with motor dynamics in Python, using the
 [acados](https://docs.acados.org/) solver and the [CasADi](https://web.casadi.org/) symbolic
 framework. The project works through MPC theory stage by stage, from terminal ingredients and
 stability to offset-free control, state estimation, tracking of piece-wise constant
-references and of time-varying trajectories, obstacle avoidance and robust tube MPC. Every stage runs on the same quadrotor
-model and changes one ingredient at a time, so the effect of each method can be compared
-directly.
+references and of time-varying trajectories, obstacle avoidance, robust tube MPC and
+stochastic MPC. Stages 1–7 use nonlinear MPC on the full model; Stages 8–9 use linear MPC on
+the hover linearization, closed around the nonlinear rotor-speed plant. Every stage runs on
+the same quadrotor model and changes one ingredient at a time, so the effect of each method
+can be compared directly.
 
 Each stage has its own document with the theory, the implementation, the scenario and the
 results with plots. This README gives the overview.
@@ -66,15 +68,14 @@ Equations of motion, motor dynamics, disturbance model and quaternion convention
 ## File structure
 
 ```
-quadrotor_3d_nmpc/
+quadrotor-mpc/
 ├── core/                         # Shared by all stages
-│   ├── quadrotor_model.py        #   CasADi dynamics (nominal, disturbance-parameterized,
-│   │                             #   augmented [x;d], MHE model), hover linearization,
-│   │                             #   AcadosSimSolver plant, quaternion utilities,
-│   │                             #   measurement model h(z), tracking model
-│   │                             #   [x; p_a] and steady-state map g(p_a); motor
-│   │                             #   dynamics: thrust-lag MPC model [x; f], rotor plant [x; Ω],
-│   │                             #   augmented [x; f; d] for the Stage 3–4 estimators
+│   ├── quadrotor_model.py        #   CasADi rigid-body dynamics, quaternion utilities,
+│   │                             #   thrust-lag MPC model [x; f] (+ disturbance d),
+│   │                             #   rotor plant [x; Ω] (AcadosSimSolver), augmented
+│   │                             #   [x; f; d] and MHE model for the Stage 3–4 estimators,
+│   │                             #   hover linearizations, measurement model h(z),
+│   │                             #   tracking model [x; f; p_a] and steady-state map g(p_a)
 │   ├── motor_check.py            #   checks of the motor models (equilibrium, linearization, steps)
 │   ├── plot_utils.py             #   all figures
 │   ├── sensor_simulator.py       #   y = [p; q; ω] + Gaussian noise (Stages 4, 6)
@@ -178,7 +179,7 @@ side by side.
 
 ## Toolchain
 
-- **acados** (Python interface, `acados_template`) — OCP solver for the NMPC and the MHE
+- **acados** (Python interface, `acados_template`) — OCP solver for every MPC stage and the MHE
 - **CasADi** 3.7.2 — symbolic dynamics and automatic differentiation
 - **NumPy** 2.x, **SciPy** — offline computations (CARE, DARE, Lyapunov equations)
 - **CVXPY** + **MOSEK** — SDP for the Stage 4b certificate (only `stage4_estimation/detectability_check.py`)
@@ -225,7 +226,7 @@ Or directly inside WSL:
 
 ```bash
 source ~/acados_env/bin/activate
-cd /path/to/quadrotor_3d_nmpc        # the repo root (on a Windows drive: /mnt/<drive>/...)
+cd /path/to/quadrotor-mpc            # the repo root (on a Windows drive: /mnt/<drive>/...)
 python -m stage4_estimation.simulate_ekf
 ```
 
