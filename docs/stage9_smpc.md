@@ -67,7 +67,7 @@ so the OCP minimizes the nominal cost of the mean.
 a recursion that needs no measurement — it is evaluated once, offline.
 
 **Chance constraint.** $G_j x \le g_j$ is $G_j z \le g_j - G_j e$, and $G_j e(k)$ is a zero-mean
-scalar with standard deviation $`\sigma_{j,k} = \sqrt{G_j \Sigma_e(k) G_j^\top}`$. The constraint
+scalar with variance $`\sigma_{j,k}^2 = G_j \Sigma_e(k) G_j^\top`$. The constraint
 on the mean is therefore
 
 ```math
@@ -80,7 +80,7 @@ For $\beta = 0.05$: $\kappa = 1.645$ (Gaussian) against $4.359$ (Cantelli). The 
 Gaussian factor (`METHOD`); the distribution-free one is implemented and printed next to it.
 
 **Inputs.** The predicted input $v + K e$ is random as well, so $H u \le h$ is tightened the same
-way with $`\sqrt{H_j K \Sigma_e(k) K^\top H_j^\top}`$. At $k = 0$ the error is zero, so
+way, with the variance $`H_j K \Sigma_e(k) K^\top H_j^\top`$. At $k = 0$ the error is zero, so
 $\eta_{j,0} = h_j$: the applied input $u(t) = v(t|t)$ is deterministic and the command limits are
 **hard** in closed loop.
 
@@ -132,8 +132,8 @@ at $k = 1$ to 72 mm at $k = N$ (stationary value 72.2 mm), the tilt bound shrink
 wall back-off was 67 mm: the thrust lag makes the feedback slightly slower.
 
 **Self-test** (`--check`): 20 000 realizations of the error system through the nonlinear rotor
-plant, open loop over the horizon. The sample standard deviations match $`\sqrt{G \Sigma_e G^\top}`$
-within 1.6 % (inputs: 0.984–1.012), and the coverage $`\Pr\{G_j e(k) \le \kappa \sigma_{j,k}\}`$ is
+plant, open loop over the horizon. The sample standard deviations match the predicted ones (the square
+roots of the diagonal of $`G \Sigma_e G^\top`$) within 1.6 % (inputs: 0.984–1.012), and the coverage $`\Pr\{G_j e(k) \le \kappa \sigma_{j,k}\}`$ is
 0.946–0.954 for the target 0.95. The sample mean stays within 0.04 σ of zero. This is the statement
 the tightening rests on, and it holds on the nonlinear plant.
 

@@ -156,7 +156,7 @@ of attitude points on $`\|q\| = r_{\max}`$. Only the attitude needs real griddin
    (fixes the scale), lower bounds on $\mathrm{diag}(Q)$ and $\mathrm{diag}(R)$, and the LMI
    $\preceq -10^{-5} I$ at each point. $P$ is a full $23 \times 23$ matrix, $Q$ and $R$ are diagonal.
    The floors on $Q$ for $w_p$ and $w_q$ are set to $1$ so the exact kinematics
-   ($\dot p = v$, $\dot q = \tfrac12 q \otimes \omega$) stay expensive to violate in the MHE.
+   ($\dot p = v$, $\dot q = q \otimes \omega / 2$) stay expensive to violate in the MHE.
 3. **Cutting plane.** Solve on a small active set of attitudes, evaluate the LMI eigenvalue on
    the *whole* pool independently of the solver, add the worst violators, repeat until none
    remain. The certificate is this eigenvalue check, not the solver status.
@@ -183,7 +183,7 @@ decay ($\lambda \to 1$, longer $T_{\min}$) or a smaller envelope.
 as on the 13-state model. The cutting plane converges in 10 iterations with 79 active attitudes
 (13-state: 80); the pool check, the sphere spot check and the interior spot check all give a
 largest LMI eigenvalue $\le -7.7 \cdot 10^{-6}$. $P$ has eigenvalues in $[0.01,\, 3.76]$. The new thrust
-channels get process-noise supply rates $Q_{f_i} \approx 0.057$, which is how strongly the MHE
+channels get process-noise supply rates (their entries of $Q$) of about $0.057$, which is how strongly the MHE
 penalizes deviations from the lag model.
 
 **Cost.** One solve takes about 40 min (MOSEK). The SDP grows with the active set, from 20 s with
@@ -330,7 +330,7 @@ EKF), and the largest error in the take-off is $0.5$ N ($0.9$ N for the EKF). Th
 the one-step EKF struggles: when the rotors spin down faster than the model's lag, the whole
 3 s of measured motion constrains $\hat f$, and $w_f$ absorbs the mismatch.
 
-The lag asymmetry that biased the EKF's $\hat d_{f_z}$ ([Stage 4a, §5.2](stage4a_ekf.md#52-disturbance-estimation)) is
+The lag asymmetry that biased the EKF's $\hat d_{fz}$ ([Stage 4a, §5.2](stage4a_ekf.md#52-disturbance-estimation)) is
 almost absent here: over $t = 5\text{–}10$ s the commands sum to $12.769$ N, the rotors to $12.767$ N,
 and $\hat f$ to $12.769$ N. The MHE's commands fluctuate much less ([§6.4](#64-states-and-inputs)), so the
 rotors hardly spin up and down, and the MHE has no asymmetry to absorb.

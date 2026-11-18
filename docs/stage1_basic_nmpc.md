@@ -107,7 +107,7 @@ command, so inside $`[f_{\min}, f_{\max}]`$.
 
 The plant (`create_rotor_plant`) models the chain of a real drone with the rotor speeds
 $\Omega$ as states: the command becomes a speed command
-$`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, the ESC speed loop follows with
+$`\omega_{\text{cmd}} = (f_{\text{cmd}}/k_f)^{1/2}`$, the ESC speed loop follows with
 $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$, and the thrust is $`f = k_f \Omega^2`$.
 To first order this is the MPC's thrust lag. For large steps the rotors spin up slower and spin
 down faster than the linear lag (`core/motor_check.py`): a small, realistic plant–model

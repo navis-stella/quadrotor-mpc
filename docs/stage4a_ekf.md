@@ -242,8 +242,8 @@ git checkout stage4
 ## 4. Scenario
 
 Identical to Stage 3: hover-to-hover step from the origin to $p_{\text{ref}} = (2, 1, 3)$ m,
-$T_{\text{sim}} = 10$ s, constant disturbance from $t = 0$ ($d_{f_x} = 0.5$ N, $d_{f_y} = -0.3$ N,
-$d_{f_z} = -2.943$ N, $d_\tau = 0$). Offset-free control is active from the start; there is no
+$T_{\text{sim}} = 10$ s, constant disturbance from $t = 0$ ($d_{fx} = 0.5$ N, $d_{fy} = -0.3$ N,
+$d_{fz} = -2.943$ N, $d_\tau = 0$). Offset-free control is active from the start; there is no
 activation switch as in Stage 3.
 
 The plant starts hovering at the origin with the rotors at hover speed.
@@ -251,7 +251,7 @@ The plant starts hovering at the origin with the rotors at hover speed.
 Before the closed loop, the EKF was verified open loop with a noise-free sensor and the hover
 command, against the augmented model integrated with 20 RK4 substeps per sample: it holds the
 hover fixed point exactly over 10 s, recovers a true $v_x = 1$ m/s that it starts at $0$ (error
-$< 10^{-12}$ at 10 s), recovers $d_{f_x} = 0.5$ N (within $5\,\%$ after $0.25$ s,
+$< 10^{-12}$ at 10 s), recovers $d_{fx} = 0.5$ N (within $5\,\%$ after $0.25$ s,
 error $< 10^{-12}$ at 10 s), and recovers rotor thrusts that differ from its hover prior by
 $\pm 0.3$ N (error $< 10^{-7}$ after $0.5$ s, while $\hat d$ moves by at most $0.002$ N).
 
@@ -276,8 +276,8 @@ the filter over one $50$ ms step, is the main source.
 ![Disturbance estimate](../results/stage4a_ekf/disturbance.png)
 
 The force estimates reach the right *mean* within about $1$ s, as intended by the tuning. In
-the first second, while the take-off saturates the motors, $\hat d_{f_z}$ dips to $-4.0$ N and
-$\hat d_{f_x}$, $\hat d_{f_y}$ swing by up to $0.8$ N: the thrust estimate is wrong there
+the first second, while the take-off saturates the motors, $\hat d_{fz}$ dips to $-4.0$ N and
+$\hat d_{fx}$, $\hat d_{fy}$ swing by up to $0.8$ N: the thrust estimate is wrong there
 ([§5.3](#53-thrust-estimation)), and the EKF explains part of the resulting motion with $d$. Over
 $t = 5\text{–}10$ s the estimates fluctuate with a standard deviation of about $0.1$ N on all three
 axes ($0.11$, $0.09$, $0.09$ N for $x, y, z$). Relative to the true values this matters most for
@@ -285,13 +285,13 @@ the horizontal components: $\pm 0.1$ N is small against $2.94$ N in $z$ but $`20
 $0.5$ N and $0.3$ N in $x$ and $y$. The torque estimates fluctuate around zero with a standard
 deviation of $2\text{–}5 \cdot 10^{-3}$ N·m.
 
-**A small bias in $\hat d_{f_z}$, and why it does no harm.** The horizontal estimates are nearly
-unbiased (mean error $\le 0.009$ N), but $\hat d_{f_z}$ sits $0.058$ N below the true value. The
+**A small bias in $\hat d_{fz}$, and why it does no harm.** The horizontal estimates are nearly
+unbiased (mean error $\le 0.009$ N), but $\hat d_{fz}$ sits $0.058$ N below the true value. The
 cause is the motor model: under the noisy commands the rotors spin down faster than they spin
 up, so on average they deliver less than commanded. Over $t = 5\text{–}10$ s the commands sum to
 $12.83$ N, the rotors to $12.77$ N. The EKF's lag is symmetric, so its total thrust estimate sits
 in between ($12.81$ N, $0.04$ N too high), and it balances the excess with an extra downward
-$\hat d_{f_z}$. The position nevertheless has no bias (mean offset $\le 1.3$ mm per axis):
+$\hat d_{fz}$. The position nevertheless has no bias (mean offset $\le 1.3$ mm per axis):
 $\hat d$ is a *lumped* disturbance that absorbs every steady mismatch between model and plant,
 not just the wind and the mass, and offset-free control only needs the model with $\hat d$ to
 predict the plant correctly.
@@ -357,7 +357,7 @@ Wall-clock numbers vary from run to run.
   to $0.02$ N in steady state but off by up to $0.9$ N while the motors saturate, which turns
   into a larger overshoot.
 - **$\hat d$ is a lumped disturbance.** It also absorbs the plant's lag asymmetry
-  ($0.06$ N in $\hat d_{f_z}$), and the position stays unbiased anyway.
+  ($0.06$ N in $\hat d_{fz}$), and the position stays unbiased anyway.
 - **Check the numerics of a check.** Fast states (the thrust lag) break both the Euler
   covariance step and the unscaled observability matrix; the exact discrete Jacobian and a
   time-scaled $\mathcal{O}$ with a PBH cross-check fix them.

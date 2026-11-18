@@ -17,7 +17,7 @@ results with plots. This README gives the overview.
 |----------|-------|
 | Rigid body (13) | position, velocity (world frame), unit quaternion (scalar-first), body rates |
 | Input (4) | thrust **commands** to the four ESCs, $`f_{\min} \le f_{\text{cmd},i} \le f_{\max} = 3 f_{\text{hover}} \approx 7.36`$ N, idle thrust $f_{\min} \approx 0.074$ N |
-| Plant (17) | rigid body + rotor speeds $\Omega$: inverse thrust map $`\omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$, ESC speed loop $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$ with $\tau_m = 30$ ms, thrust $`f = k_f \Omega^2`$ |
+| Plant (17) | rigid body + rotor speeds $\Omega$: inverse thrust map $`\omega_{\text{cmd}} = (f_{\text{cmd}}/k_f)^{1/2}`$, ESC speed loop $`\dot\Omega = (\omega_{\text{cmd}} - \Omega)/\tau_m`$ with $\tau_m = 30$ ms, thrust $`f = k_f \Omega^2`$ |
 | MPC prediction model (17) | rigid body + rotor thrusts $f$ with the lag $`\dot f = (f_{\text{cmd}} - f)/\tau_m`$ (equal to the plant to first order); rotor speeds measured, passed as $`f = k_f \Omega^2`$ |
 | Migration to the motor dynamics | done for all stages (1–9); the 13-state version with the thrusts as direct input is tag `rigid-body` |
 | Layout | `+` configuration, hover thrust $f_{\text{hover}} = mg/4 \approx 2.45$ N |

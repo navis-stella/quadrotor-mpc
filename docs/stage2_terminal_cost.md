@@ -66,13 +66,13 @@ asymptotic stability and recursive feasibility.
 
 **Design procedure** (Chen & Allgöwer, 1998 → `compute_qih_params.py`):
 
-**Step 0 — Remove $q_w$.** At hover, the linearized $\dot q_w = -\tfrac12(q_x p + q_y q + q_z r)$
+**Step 0 — Remove $q_w$.** At hover, the linearized $\dot q_w = -(q_x p + q_y q + q_z r)/2$
 has zero row in both $A$ and $B$: $q_w$ is a marginal ($\lambda = 0$), uncontrollable mode, so
 the pair $(A, B)$ is not stabilizable and Riccati solvers fail. It is also redundant, since
 $`\|q\| = 1`$ fixes it. All offline computations use the 16-state model
 $[p, v, q_x, q_y, q_z, \omega, f]$. Wherever a reduced state is evaluated on the nonlinear model,
-$`q_w = \sqrt{1 - \|q_v\|^2}`$ puts the quaternion back on the unit sphere; in the OCP, $q_w$
-gets a small terminal weight ($T_s Q_{q_w}$) that only keeps the Gauss-Newton Hessian regular.
+$`q_w = (1 - \|q_v\|^2)^{1/2}`$ puts the quaternion back on the unit sphere; in the OCP, $q_w$
+gets a small terminal weight ($T_s$ times its stage weight) that only keeps the Gauss-Newton Hessian regular.
 
 **Step 1 — Stabilizing gain $K$.** The theory needs *some* $K$ with $A_K = A + BK$ Hurwitz; it
 does not need $K$ to be the LQR gain of the cost. The implementation takes the LQR gain of a
@@ -87,7 +87,7 @@ $R_{\text{cmd}} = 0.01$ is small, so with $s = 1$ the gain is very aggressive an
 saturate a few millimetres from hover; the input bounds alone then make $\Omega_\alpha$ tiny. A
 gentler $K$ leaves input headroom but less decrease margin. `select_aux_gain()` sweeps
 $s \in \{1, 10, \dots, 10^5\}$ and keeps the largest terminal set (volume
-$\propto \alpha^{n/2} / \sqrt{\det P}$), see [§5.1](#51-stage-2a--the-terminal-set).
+$`\propto \alpha^{n/2} (\det P)^{-1/2}`$), see [§5.1](#51-stage-2a--the-terminal-set).
 
 **Step 2 — Modified Lyapunov equation.** Choose $`0 < \kappa < -\max \mathrm{Re}\,\lambda(A_K)`$
 (implementation: half the stability margin) and solve
@@ -98,7 +98,7 @@ $\propto \alpha^{n/2} / \sqrt{\det P}$), see [§5.1](#51-stage-2a--the-terminal-
 
 The equation uses the *cost's* $Q^{*} = Q + K^\top R K$ (with $R$, not $R_{\text{aux}}$), because
 $P$ has to bound the cost the OCP actually counts. For the linear system,
-$`\frac{d}{dt}x^\top P x = -x^\top Q^{*}x - 2\kappa\, x^\top P x`$: the $\kappa$ term is a margin.
+$`\mathrm{d}(x^\top P x)/\mathrm{d}t = -x^\top Q^{*}x - 2\kappa\, x^\top P x`$: the $\kappa$ term is a margin.
 Along the nonlinear dynamics, with the residual $\varphi(x) = f(x, Kx) - A_K x$,
 
 ```math
@@ -130,7 +130,7 @@ $\alpha \approx 10^{-4}$. The implementation checks the inequality the proof act
 m(x) \;=\; \frac{\tfrac{d}{dt}\, x^\top P x \;+\; x^\top Q^{*} x}{x^\top P x} \;\le\; 0 \qquad \forall\, x \in \Omega_\alpha ,
 ```
 
-with $\tfrac{d}{dt} x^\top P x = 2x^\top P f(x, Kx)$ evaluated on the nonlinear model. Near the
+with $`\mathrm{d}(x^\top P x)/\mathrm{d}t = 2x^\top P f(x, Kx)`$ evaluated on the nonlinear model. Near the
 origin $m \to -2\kappa$; the nonlinearity raises $m$ away from it. The maximum of $m$ over the
 ellipsoid is estimated by seeded sampling (4000 points, half on the boundary, half inside)
 followed by a local maximization (SLSQP with exact CasADi gradients) from the five worst
@@ -164,8 +164,8 @@ W_e = P_{\text{lqr}}, \qquad A_d^\top P A_d - P - A_d^\top P B_d \bigl(T_s R + B
 where $(A_d, B_d)$ is the ZOH discretization ($T_s = T/N = 0.05$ s) of the 16-state hover
 linearization (Step 0 above) and $Q_{\text{red}}$ is $Q$ without the $q_w$ entry
 (`core/terminal_cost.compute_thrust_lag_dare_terminal_cost`). $P_{\text{red}}$ is checked for
-positive definiteness and embedded into $17 \times 17$ with the small weight $T_s Q_{q_w}$ on
-$q_w$. There is no terminal constraint.
+positive definiteness and embedded into $17 \times 17$, with $T_s$ times the stage weight on
+$q_w$ as the small $q_w$ entry. There is no terminal constraint.
 
 **Why the weights are scaled by $T_s$.** acados multiplies every stage cost by its time step,
 so the OCP minimizes $`\sum_k T_s\, \ell(x_k, u_k) + x_N^\top W_e x_N`$. The cost-to-go of exactly
@@ -237,7 +237,7 @@ the migration aligned them with Stage 1.)
 | $10^5$ | $2.8 \cdot 10^{-5}$ | decrease condition | 0.08 | 0.9 mm | −94.1 |
 
 The "half-width" is the largest $|p_x|$ in $\Omega_\alpha$ with all other coordinates at hover,
-$`\sqrt{\alpha (P^{-1})_{11}}`$. With the cost's own LQR gain ($s = 1$) the motors saturate
+$`(\alpha\, (P^{-1})_{11})^{1/2}`$. With the cost's own LQR gain ($s = 1$) the motors saturate
 first. With gentler gains the nonlinearity takes over: a slower $K$ means a smaller $\kappa$,
 so less margin to absorb $\varphi$. $s = 10$ balances the two and gives a terminal set about
 $e^{11.5} \approx 10^5$ times larger in volume than $s = 1$. Its half-widths, one coordinate at

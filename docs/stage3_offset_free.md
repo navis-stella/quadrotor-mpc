@@ -50,8 +50,8 @@ A 6-dimensional constant disturbance, split by where it enters:
 
 | Component | Unit | Frame | Physical source |
 |---|---|---|---|
-| $d_f = [d_{f_x}, d_{f_y}, d_{f_z}]$ | N | world | wind, mass error $`\Delta m\, g`$ |
-| $d_\tau = [d_{\tau_x}, d_{\tau_y}, d_{\tau_z}]$ | N·m | body | CoG offset → parasitic torque |
+| $d_f = [d_{fx}, d_{fy}, d_{fz}]$ | N | world | wind, mass error $`\Delta m\, g`$ |
+| $d_\tau = [d_{\tau x}, d_{\tau y}, d_{\tau z}]$ | N·m | body | CoG offset → parasitic torque |
 
 ```math
 \dot v = \frac{f_{\text{total}}}{m} R(q)_{:,2} - g\, e_z + \frac{d_f}{m}, \qquad
@@ -151,7 +151,7 @@ $v = 0$, $\omega = 0$ all rate and gyroscopic terms vanish:
 
 ```math
 T_s\, z_b + d_f = m g\, e_3 \quad\Longrightarrow\quad
-F_{\text{req}} = [-d_{f_x},\; -d_{f_y},\; mg - d_{f_z}]^\top, \quad
+F_{\text{req}} = [-d_{fx},\; -d_{fy},\; mg - d_{fz}]^\top, \quad
 T_s = \|F_{\text{req}}\|, \quad z_b = F_{\text{req}} / T_s.
 ```
 
@@ -171,7 +171,7 @@ vertical, $y_b = [-\sin\psi, \cos\psi, 0]$ is used.
 **(3) Torque balance → motor thrusts.** With $\omega = 0$: $\tau(u_s) = -d_\tau$, so
 
 ```math
-u_s = M^{-1} \bigl[T_s,\; -d_{\tau_x},\; -d_{\tau_y},\; -d_{\tau_z}\bigr]^\top, \qquad
+u_s = M^{-1} \bigl[T_s,\; -d_{\tau x},\; -d_{\tau y},\; -d_{\tau z}\bigr]^\top, \qquad
 M = \begin{bmatrix} 1 & 1 & 1 & 1 \\ 0 & -L & 0 & L \\ -L & 0 & L & 0 \\ -c_\tau & c_\tau & -c_\tau & c_\tau \end{bmatrix},
 ```
 
@@ -265,9 +265,9 @@ A constant disturbance acts on the plant from $t = 0$:
 
 | Quantity | Value |
 |---|---|
-| $d_{f_x}$ | $+0.5$ N (wind) |
-| $d_{f_y}$ | $-0.3$ N (wind) |
-| $d_{f_z}$ | $-3 \times 0.981 = -2.943$ N ($`\approx 30\%`$ mass error) |
+| $d_{fx}$ | $+0.5$ N (wind) |
+| $d_{fy}$ | $-0.3$ N (wind) |
+| $d_{fz}$ | $-3 \times 0.981 = -2.943$ N ($`\approx 30\%`$ mass error) |
 | $d_\tau$ | $0$ |
 
 The run is split into two phases. For $t < 5$ s, standard MPC flies the maneuver and shows the
@@ -292,20 +292,20 @@ isolates the *correction mechanism*; detection delay after a disturbance onset i
 ![EKF disturbance estimation](../results/stage3_offsetfree/disturbance.png)
 
 Starting from $\hat d = 0$, the force estimates stay within $`5\%`$ of their true values from
-$1.15$ s ($\hat d_{f_z}$), $1.7$ s ($\hat d_{f_y}$) and $1.85$ s ($\hat d_{f_x}$) on. On the way
-$\hat d_{f_z}$ undershoots to $-3.27$ N and $\hat d_{f_y}$ to $-0.37$ N. All of this happens well
+$1.15$ s ($\hat d_{fz}$), $1.7$ s ($\hat d_{fy}$) and $1.85$ s ($\hat d_{fx}$) on. On the way
+$\hat d_{fz}$ undershoots to $-3.27$ N and $\hat d_{fy}$ to $-0.37$ N. All of this happens well
 before $T_{\text{activate}}$, so the activation transient at $t = 5$ s is caused by the
 controller, not by the estimator. Over the last second of the run all six estimation errors
 are below $2 \cdot 10^{-6}$ (N and N·m).
 
 The torque estimates show short transients during the first half second, up to $0.07$ N·m in
-$\hat d_{\tau_y}$, and small bumps ($< 0.006$ N·m) at activation; no torque disturbance is
+$\hat d_{\tau y}$, and small bumps ($< 0.006$ N·m) at activation; no torque disturbance is
 injected. They come from the **motor-lag mismatch** ([§2.2](#22-augmented-ekf)): in the first
 $0.4$ s the commands jump between idle and full thrust, the rotor plant spins up more slowly
 than the model's lag, and the thrust inside a prediction step is wrong by up to $0.5$ N per
 rotor. A replay of the same commands through a plant equal to the EKF's model confirms it:
 
-| | $\max\lvert\hat d_\tau\rvert$ [N·m] | $\min \hat d_{f_z}$ [N] |
+| | $\max\lvert\hat d_\tau\rvert$ [N·m] | $\min \hat d_{fz}$ [N] |
 |---|---|---|
 | rotor plant (closed loop) | $0.039,\ 0.070,\ 0.0016$ | $-3.27$ |
 | plant = EKF model | $0.0003,\ 0.0008,\ 0.00006$ | $-2.94$ |

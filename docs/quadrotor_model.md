@@ -47,7 +47,7 @@ f_{\text{total}} = f_1 + f_2 + f_3 + f_4 .
 \end{aligned}
 ```
 
-equivalently $`\dot{q} = \tfrac12\, q \otimes [0, p, q, r]`$.
+equivalently $`\dot{q} = q \otimes [0, p, q, r] / 2`$.
 
 **Rotational dynamics** (rigid-body Euler equations, body frame, independent of the attitude
 representation):

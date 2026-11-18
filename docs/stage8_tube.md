@@ -115,7 +115,7 @@ state inside them.
 ### The rotor loop and the command lead
 
 The plant's speed loop is $\dot\Omega = (\Omega_{\text{cmd}} - \Omega)/\tau_m$ with
-$`\Omega_{\text{cmd}} = \sqrt{f_{\text{cmd}}/k_f}`$. In thrusts,
+$`\Omega_{\text{cmd}} = (f_{\text{cmd}}/k_f)^{1/2}`$. In thrusts,
 
 ```math
 \dot f = 2 k_f \Omega \dot\Omega
@@ -309,7 +309,7 @@ to 72 % of a bound (the tilt): the tightened tilt is only 1.6°.
   $`Q = \mathrm{blkdiag}(1/(1\,\text{m})^2,\; 1/\bar x_j^2,\; M^\top \mathrm{diag}(1/\bar\nu_f^2) M) + E_f^\top G E_f`$,
   $`R = M^\top \mathrm{diag}(1/\bar\nu^2)\, M + G`$, $S = -E_f^\top G$, with
   $`G = M^\top \mathrm{diag}(1/\Delta\bar\nu^2) M`$ and $E_f$ the selector of $\delta f$. The lead
-  term is $\lVert M(v - \delta f) \rVert^2_{\mathrm{diag}(1/\Delta\bar\nu^2)}$ written out. Without it the
+  term is $`(v - \delta f)^\top G\, (v - \delta f)`$ written out. Without it the
   DARE gain $K_f$ leads the thrust states freely, and the terminal ellipsoid has to shrink to 2 cm
   to keep $M(K_f - E_f) z$ inside the tightened lead box (0.0009 N·m in yaw). With it, the lead rows
   stop being the bottleneck.
@@ -405,7 +405,7 @@ All figures are in `results/stage8_tube/`; the numbers are printed by `summarize
 At $t = 0$ the error is zero, so the applied wrench equals the nominal one. Afterwards the feedback
 $K e$ makes up most of the input: the nominal is $\approx 0$ after 2 s and the applied wrench follows
 the disturbance. The saw-tooth in $\delta T$ is the ancillary feedback answering each new vertex of
-$d_{f,z}$ every 0.5 s. The commanded wrench uses at most 22 % of $\mathbb U$.
+$d_{fz}$ every 0.5 s. The commanded wrench uses at most 22 % of $\mathbb U$.
 
 ### 7.3 The inequalities behind the guarantee
 

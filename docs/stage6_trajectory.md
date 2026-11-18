@@ -236,7 +236,7 @@ trajectory of the model.
 |---|---|---|---|---|---|---|---|---|---|
 | weight | 80 | 120 | 10 | 15 | 120 | 80 | 1 | 0.1 | 0.01 |
 
-The attitude weights are the former $q_x, q_y, q_z$ weights: $\mathrm{vec} \approx \frac12$ of
+The attitude weights are the former $q_x, q_y, q_z$ weights: $\mathrm{vec} \approx 1/2$ of
 the roll/pitch/yaw error, as $q_{x,y,z}$ was at hover.
 
 ## 5. Closed loop and scenario
@@ -344,7 +344,7 @@ the end of the reference.
 Thin steps are the commands, thick lines the rotor thrust $k_f \Omega^2$, dashed the feedforward.
 The total thrust follows the flatness feedforward $T_r$: up to about 11 N while the hop
 accelerates upward, down to about 8.2 N while it brakes, then slightly above $mg$ in cruise (the
-centripetal force needs $m\sqrt{g^2 + (R\omega^2)^2} \approx 10.0$ N). The commands stay in
+centripetal force needs $`m\, (g^2 + (R\omega^2)^2)^{1/2} \approx 10.0`$ N). The commands stay in
 $`[1.87,\, 3.20]`$ N, far from both limits; the feedback adds noise of a few tenths of a newton
 around the feedforward, which the speed loop smooths in the rotor thrust.
 
