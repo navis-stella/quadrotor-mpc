@@ -246,7 +246,7 @@ $p, q$ 0.42 rad/s, thrusts ±1.46 N.
 
 The simulation check confirms it on the nonlinear model: from 40 boundary points the
 commands stay within $[1.43, 3.32]$ N, $x^\top P x$ never exceeds $0.991\,\alpha$, and
-$x^\top P x + \int x^\top Q^* x$ never increases (largest step $-2 \cdot 10^{-10}\, V(0)$).
+$x^\top P x + \int x^\top Q^* x$ never increases (largest step $$-2 \cdot 10^{-10}\, V(0)$$).
 
 ### 5.2 Stage 2a — when does the trajectory enter $\Omega_\alpha$?
 
